@@ -377,27 +377,36 @@ when SSH isn't detected, the handler shows local info as usual.
 
 ### setup (one-time per remote host)
 
-**step 1 — local machine:** create a symlink (cmux socket path has spaces that break SSH):
+**step 1 — local machine:** create a symlink (cmux socket path has spaces that break SSH -R):
 
 ```bash
 # add to your ~/.zshrc or ~/.bashrc
 if [ -S "$CMUX_SOCKET_PATH" ]; then
   ln -sf "$CMUX_SOCKET_PATH" /tmp/cmux-local.sock 2>/dev/null
-  printf 'export CMUX_WORKSPACE_ID=%s\nexport CMUX_SURFACE_ID=%s\n' \
-    "${CMUX_WORKSPACE_ID:-}" "${CMUX_SURFACE_ID:-}" > /tmp/cmux-fwd.env 2>/dev/null
 fi
 ```
 
-**step 2 — local machine:** add socket forwarding to `~/.ssh/config`:
+**step 2 — local machine:** add socket forwarding + env forwarding to `~/.ssh/config`:
 
 ```
 Host myserver
   RemoteForward /tmp/cmux-fwd.sock /tmp/cmux-local.sock
+  SendEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID
 ```
 
-**step 3 — remote machine:** enable socket reuse in sshd (one-time, needs sudo):
+`SendEnv` forwards the correct workspace/surface IDs from each tab's environment directly through SSH — no shared env file that goes stale.
+
+**step 3 — remote machine:** run the setup script (handles sshd config + shell profile):
 
 ```bash
+scp remote-setup.sh myserver: && ssh myserver bash remote-setup.sh
+```
+
+or manually:
+
+```bash
+# accept cmux env vars from SSH + allow socket reuse
+echo "AcceptEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID" | sudo tee -a /etc/ssh/sshd_config
 echo "StreamLocalBindUnlink yes" | sudo tee -a /etc/ssh/sshd_config
 # macOS:
 sudo launchctl kickstart -k system/com.openssh.sshd
@@ -409,19 +418,23 @@ sudo systemctl restart sshd
 
 ```bash
 # copy handler files from local
-scp ~/.cc-cmux/handler.cjs ~/.cc-cmux/tab-title-worker.cjs ~/.cc-cmux/config.json myserver:~/.cc-cmux/
+scp ~/.cc-cmux/handler.cjs myserver:~/.cc-cmux/
 
-# or run the remote setup script
+# or run the remote setup script (also handles step 3)
 scp remote-setup.sh myserver: && ssh myserver bash remote-setup.sh
 ```
 
-add to the remote machine's `~/.zshrc` or `~/.bashrc`:
+add to the remote machine's `~/.zshrc` or `~/.bashrc` (the setup script does this automatically):
 
 ```bash
 # cmux-claude-pro: detect forwarded cmux socket
+# SSH SendEnv/AcceptEnv provides correct per-connection workspace/surface IDs.
+# Env file is fallback only (for ET/mosh where SendEnv is unavailable).
 if [ -S /tmp/cmux-fwd.sock ] && [ -n "$SSH_CONNECTION" ]; then
   export CMUX_SOCKET_PATH=/tmp/cmux-fwd.sock
-  [ -f /tmp/cmux-fwd.env ] && . /tmp/cmux-fwd.env
+  if [ -z "$CMUX_WORKSPACE_ID" ] && [ -f /tmp/cmux-fwd.env ]; then
+    . /tmp/cmux-fwd.env
+  fi
 fi
 ```
 
@@ -437,23 +450,17 @@ claude_code: Working: Bash: npm test ← blue hammer
 
 ### for ET (eternal terminal)
 
-ET doesn't support socket forwarding. run a background SSH tunnel alongside it:
+ET doesn't support `SendEnv` or socket forwarding. run a background SSH tunnel alongside it and write an env file with the current tab's IDs:
 
 ```bash
-# start socket tunnel (runs in background, stays alive)
+# write workspace/surface IDs for this tab, then start socket tunnel + ET
+printf 'export CMUX_WORKSPACE_ID=%s\nexport CMUX_SURFACE_ID=%s\n' \
+  "$CMUX_WORKSPACE_ID" "$CMUX_SURFACE_ID" | ssh myserver 'cat > /tmp/cmux-fwd.env'
 ssh -N -f -R /tmp/cmux-fwd.sock:/tmp/cmux-local.sock myserver
-
-# then use et normally
 et myserver
 ```
 
-or use the `cmux-ssh` wrapper:
-
-```bash
-# background tunnel mode for ET
-cmux-ssh -N -f myserver
-et myserver
-```
+the handler reads the env file as fallback when `SendEnv`/`AcceptEnv` isn't available.
 
 ## how it works
 
