@@ -29,16 +29,24 @@ export async function onNotification(
 
   const title = event.title ?? 'Claude Code';
   const message = event.message ?? '';
+  const notifType = (event as any).notification_type ?? '';
 
-  // Set status to "Needs input" (matching official cmux behavior for notifications)
-  try {
-    socket.fire(
-      cmd.setStatus('claude_code', 'Needs input', {
-        icon: 'bell.fill',
-        color: '#4C8DFF',
-      }),
-    );
-  } catch {}
+  // Only set "Needs input" for notifications that actually require user action
+  // (permission, question, waiting). Skip for informational/completion notifications.
+  const needsInput = /permission|question|input|waiting|attention/i.test(
+    `${title} ${message} ${notifType}`,
+  );
+
+  if (needsInput) {
+    try {
+      socket.fire(
+        cmd.setStatus('claude_code', 'Needs input', {
+          icon: 'bell.fill',
+          color: '#4C8DFF',
+        }),
+      );
+    } catch {}
+  }
 
   try {
     socket.fire(cmd.notifyTarget(env.workspaceId, env.surfaceId, title, '', message));

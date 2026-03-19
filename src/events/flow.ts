@@ -49,16 +49,14 @@ export async function onUserPromptSubmit(
   // Clear stale notifications from previous turn (matches official cmux behavior)
   commands.push(cmd.clearNotifications());
 
-  // Set status to Thinking
-  if (config.features.statusPills) {
-    const display = STATUS_DISPLAY.thinking;
-    commands.push(
-      cmd.setStatus('claude_code', formatStatusValue('thinking'), {
-        icon: display.icon,
-        color: display.color,
-      }),
-    );
-  }
+  // Always set status to Thinking — clears any stuck "Needs input" / "Waiting"
+  const display = STATUS_DISPLAY.thinking;
+  commands.push(
+    cmd.setStatus('claude_code', formatStatusValue('thinking'), {
+      icon: display.icon,
+      color: display.color,
+    }),
+  );
 
   // Clear progress for fresh start
   if (config.features.progress) {
@@ -104,28 +102,27 @@ export async function onStop(
 
   const commands: string[] = [];
 
-  // Set status to Done
-  if (config.features.statusPills) {
-    const display = STATUS_DISPLAY.done;
-    commands.push(
-      cmd.setStatus('claude_code', formatStatusValue('done'), {
-        icon: display.icon,
-        color: display.color,
-      }),
-    );
-  }
+  // Always clear notifications and set Done — prevents "Needs input" from sticking
+  commands.push(cmd.clearNotifications());
+
+  // Always set status to Done (not gated by statusPills — this is a cleanup)
+  const display = STATUS_DISPLAY.done;
+  commands.push(
+    cmd.setStatus('claude_code', formatStatusValue('done'), {
+      icon: display.icon,
+      color: display.color,
+    }),
+  );
 
   // Set progress to 100%
   if (config.features.progress) {
     commands.push(cmd.setProgress(1.0, 'Complete'));
   }
 
-  if (commands.length > 0) {
-    try {
-      await socket.sendBatch(commands);
-    } catch {
-      // Non-critical
-    }
+  try {
+    await socket.sendBatch(commands);
+  } catch {
+    // Non-critical
   }
 
   // Send targeted desktop notification if configured (like official cmux hooks)
