@@ -1,10 +1,9 @@
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 
-const ENV_FILE = '/tmp/cmux-fwd.env';
 const FWD_SOCK = '/tmp/cmux-fwd.sock';
 
 /**
- * Query the cmux socket for a value via socat.
+ * Query the cmux socket synchronously via socat.
  */
 function querySocket(socketPath: string, command: string, timeoutMs = 500): string {
   try {
@@ -21,16 +20,15 @@ function querySocket(socketPath: string, command: string, timeoutMs = 500): stri
 /**
  * Load cmux env for SSH/remote sessions.
  *
- * The handler auto-detects the forwarded socket at /tmp/cmux-fwd.sock
- * and reads workspace/surface IDs from /tmp/cmux-fwd.env (written by
- * the local machine's .() function or cmux-ssh wrapper).
+ * For SSH: the socket is forwarded to /tmp/cmux-fwd.sock.
+ * We query current_workspace directly — this always returns the
+ * focused workspace, which is the SSH tab when the user is looking at it.
  *
- * If the env file doesn't exist, falls back to querying current_workspace
- * from the socket. This targets whichever workspace is focused — not
- * ideal but better than nothing.
+ * The env file is NOT used for workspace ID because it goes stale
+ * every time you open a new tab or switch workspaces.
  */
 function loadForwardedEnv(): void {
-  // Already have env vars — local cmux session, nothing to do
+  // Already have both env vars — local cmux session
   if (process.env['CMUX_SOCKET_PATH'] && process.env['CMUX_WORKSPACE_ID']) {
     return;
   }
@@ -40,39 +38,18 @@ function loadForwardedEnv(): void {
     return;
   }
 
+  // Verify socket is alive
+  const pong = querySocket(FWD_SOCK, 'ping');
+  if (pong !== 'PONG') {
+    return;
+  }
+
   process.env['CMUX_SOCKET_PATH'] = FWD_SOCK;
 
-  // Load env file (contains workspace/surface IDs written by local machine)
-  if (existsSync(ENV_FILE)) {
-    try {
-      const content = readFileSync(ENV_FILE, 'utf-8');
-      for (const line of content.split('\n')) {
-        const match = line.match(/^export\s+(\w+)=(.+)$/);
-        if (match) {
-          const [, key, value] = match;
-          if (value && !process.env[key]) {
-            process.env[key] = value;
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // Validate workspace ID exists in cmux
-  if (process.env['CMUX_WORKSPACE_ID']) {
-    const check = querySocket(FWD_SOCK, `sidebar_state --tab=${process.env['CMUX_WORKSPACE_ID']}`);
-    if (check.startsWith('ERROR') || check.includes('Tab not found')) {
-      // Stale — clear it so we fall through to discovery
-      delete process.env['CMUX_WORKSPACE_ID'];
-    }
-  }
-
-  // Last resort: query current_workspace (returns focused workspace)
-  if (!process.env['CMUX_WORKSPACE_ID']) {
-    const wid = querySocket(FWD_SOCK, 'current_workspace');
-    if (wid && !wid.startsWith('ERROR')) {
-      process.env['CMUX_WORKSPACE_ID'] = wid;
-    }
+  // Always query current_workspace — it's the only reliable source
+  const wid = querySocket(FWD_SOCK, 'current_workspace');
+  if (wid && !wid.startsWith('ERROR')) {
+    process.env['CMUX_WORKSPACE_ID'] = wid;
   }
 }
 
