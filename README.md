@@ -110,22 +110,70 @@ every claude code lifecycle event we handle:
 
 ## vs the built-in integration
 
-cmux ships with its own claude code integration. this replaces it completely:
+cmux ships with its own claude code integration (via a wrapper script at `Resources/bin/claude` that injects `--settings` with 6 hooks). cmux-claude-pro replaces it completely with 16 hooks and way more features.
+
+### event-by-event comparison
+
+the built-in integration handles 6 hook events. we handle all 6 plus 10 more:
+
+| hook event | cmux built-in | cmux-claude-pro | what we add |
+|---|---|---|---|
+| `SessionStart` | sets agent PID via `set_agent_pid` | sets PID + Ready status + git branch + model metadata + clear stale state | git, model, richer init |
+| `SessionEnd` | clears status + PID + notifications | clears status + PID + notifications + progress + logs + metadata + state files | full cleanup |
+| `UserPromptSubmit` | clears notifications, sets "Running" | clears notifications, sets "Thinking...", resets progress bar | distinct thinking state |
+| `PreToolUse` | clears notifications, sets "Running" (async) | sets "Working: Edit: foo.ts" with tool name, increments progress | tool-specific status |
+| `Stop` | sets "Idle", sends `notify_target` | sets "Done", completes progress to 100%, sends `notify_target` with message preview | done vs idle, progress |
+| `Notification` | classifies + forwards via `notify_target`, sets "Needs input" | forwards via `notify_target`, sets "Needs input" | same |
+| `PostToolUse` | — | logs every tool result to sidebar (`Read: foo.ts`, `Bash: \`npm test\``) | **new** |
+| `PostToolUseFailure` | — | logs failures with warning level | **new** |
+| `PermissionRequest` | — | sets "Waiting" status, sends notification | **new** |
+| `StopFailure` | — | sets "Error" status, sends error notification | **new** |
+| `SubagentStart` | — | logs agent spawn, shows count in status | **new** |
+| `SubagentStop` | — | logs agent completion | **new** |
+| `PreCompact` | — | sets "Compacting..." status, logs start | **new** |
+| `PostCompact` | — | logs completion, reverts status | **new** |
+| `TaskCompleted` | — | logs task completion | **new** |
+| `WorktreeCreate` | — | logs worktree creation | **new** |
+
+### feature comparison
 
 | feature | cmux built-in | cmux-claude-pro |
 |---|---|---|
+| hook events | 6 | **16** |
 | status states | 3 (Running, Idle, Needs input) | **7** (Ready, Thinking, Working, Waiting, Done, Error, Compacting) |
-| tool names in status | opt-in UserDefault | always on — "Working: Edit: foo.ts" |
-| progress bar | no | **yes** — adaptive algorithm |
-| sidebar logs | no | **yes** — per-tool formatted |
-| git integration | no | **yes** — branch + dirty state |
+| tool names in status | opt-in via hidden UserDefault | always on — "Working: Edit: foo.ts" |
+| progress bar | no | **yes** — adaptive `n/(n+K)` algorithm |
+| sidebar activity logs | no | **yes** — per-tool formatted entries |
+| git branch in sidebar | no | **yes** — branch + dirty state |
+| model metadata | no | **yes** — shows active model |
 | subagent tracking | no | **yes** — count + spawn/done logs |
 | task completion | no | **yes** |
 | compaction visibility | no | **yes** |
-| crash recovery | yes (PID polling) | yes (same `set_agent_pid` mechanism) |
+| error state | no (stays "Running" on error) | **yes** — distinct "Error" state |
+| crash recovery | yes (`set_agent_pid`) | yes (same mechanism) |
 | targeted notifications | yes (`notify_target`) | yes (same mechanism) |
 | notification cleanup | yes (`clear_notifications`) | yes (same mechanism) |
+| message preview in notif | reads transcript JSONL | reads `last_assistant_message` from hook payload |
 | transport | CLI binary (~30ms) | **unix socket (~8ms)** |
+| hook injection | wraps `claude` binary via PATH | registers in `settings.json` directly |
+| configuration | none | **per-feature toggles** in config.json |
+
+### cmux primitives comparison
+
+| socket command | cmux built-in | cmux-claude-pro |
+|---|---|---|
+| `set_status` | yes — key: `claude_code` | yes — same key |
+| `clear_status` | yes | yes |
+| `set_agent_pid` | yes | yes |
+| `clear_agent_pid` | yes | yes |
+| `notify_target` | yes | yes |
+| `clear_notifications` | yes | yes |
+| `set_progress` | — | **yes** |
+| `clear_progress` | — | **yes** |
+| `log` | — | **yes** |
+| `clear_log` | — | **yes** |
+| `report_git_branch` | — | **yes** |
+| `report_meta` | — | **yes** |
 
 ## install
 
@@ -138,6 +186,13 @@ git clone https://github.com/yigitkonur/cmux-claude-pro.git ~/.cmux-claude-pro \
   && bash install.sh
 ```
 
+the installer automatically:
+- copies handler files to `~/.cc-cmux/`
+- **disables cmux's built-in claude integration** (via `defaults write`)
+- merges 16 hooks into your `~/.claude/settings.json` (preserving existing hooks)
+- creates a backup at `settings.json.cc-cmux-backup`
+- verifies the handler loads correctly
+
 ### step by step
 
 ```bash
@@ -149,26 +204,29 @@ cd cmux-claude-pro
 npm install
 npm run build
 
-# 3. install handler to ~/.cc-cmux/
+# 3. install — disables built-in integration, merges hooks, copies handler
 bash install.sh
 
-# 4. add hooks to your settings (see below)
-
-# 5. restart claude code
+# 4. restart claude code
 ```
 
-### disable cmux's built-in claude integration
+### what the installer does with cmux's built-in integration
 
-**this step is required.** cmux-claude-pro takes over the `claude_code` status namespace. if you leave the built-in integration on, you'll see two systems fighting over the same status pill.
+cmux-claude-pro takes over the `claude_code` status key. the installer automatically runs:
 
-1. open **cmux Settings** (Cmd+,)
-2. go to **Automation**
-3. find **"Claude Code Integration"**
-4. **turn it off**
+```bash
+defaults write com.cmuxterm.app claudeCodeHooksEnabled -bool false
+```
+
+this disables cmux's wrapper script that normally injects its own hooks via `--settings`. if you ever want to go back:
+
+```bash
+defaults write com.cmuxterm.app claudeCodeHooksEnabled -bool true
+```
 
 ## hook configuration
 
-add these hooks to your `~/.claude/settings.json` inside the `"hooks"` key. if you already have hooks, these get appended — your existing hooks are preserved.
+the installer handles this automatically. if you prefer manual setup, add these hooks to your `~/.claude/settings.json` inside the `"hooks"` key. existing hooks are preserved — cc-cmux entries are appended alongside your own.
 
 ```json
 {
@@ -403,7 +461,7 @@ studied and borrowed patterns from:
 ## uninstall
 
 ```bash
-# remove hooks from settings.json (keeps your other hooks)
+# 1. remove hooks from settings.json (keeps your other hooks)
 python3 -c "
 import json, os
 p = os.path.expanduser('~/.claude/settings.json')
@@ -415,11 +473,13 @@ json.dump(s, open(p, 'w'), indent=2)
 print('removed cc-cmux hooks')
 "
 
-# remove handler files
+# 2. remove handler files
 rm -rf ~/.cc-cmux/
 
-# re-enable cmux's built-in integration if you want
-# cmux Settings → Automation → Claude Code Integration → ON
+# 3. re-enable cmux's built-in claude integration
+defaults write com.cmuxterm.app claudeCodeHooksEnabled -bool true
+
+# 4. restart claude code
 ```
 
 ## troubleshooting
