@@ -141,43 +141,62 @@ export async function onPostToolUse(
   state: StateManager,
   config: CcCmuxConfig,
 ): Promise<void> {
-  const { tool_name: toolName, tool_input: toolInput, tool_response: toolResponse } = event;
+  const { tool_name: toolName, tool_input: toolInput } = event;
+
+  // Safely extract tool_response — it can be enormous for image reads (binary blobs).
+  // Truncate to prevent socket command overflow and state file bloat.
+  let toolResponse: unknown = undefined;
+  try {
+    const raw = event.tool_response;
+    if (typeof raw === 'string' && raw.length > 2000) {
+      toolResponse = raw.slice(0, 2000);
+    } else {
+      toolResponse = raw;
+    }
+  } catch {
+    // Ignore — response is not critical for logging
+  }
 
   // Log the tool result
   if (config.features.logs) {
-    const logMsg = formatToolLog(
-      toolName,
-      toolInput as Record<string, unknown>,
-      toolResponse,
-    );
-    const level = getLogLevel(toolName, false);
     try {
+      const logMsg = formatToolLog(
+        toolName,
+        toolInput as Record<string, unknown>,
+        toolResponse,
+      );
+      const level = getLogLevel(toolName, false);
       socket.fire(cmd.log(logMsg, {
         level: level as 'info' | 'success' | 'warning' | 'error',
         source: LOG_SOURCE,
       }));
     } catch {
-      // Non-critical
+      // Non-critical — log what we can
+      try {
+        socket.fire(cmd.log(toolName, { level: 'info', source: LOG_SOURCE }));
+      } catch {}
     }
   }
 
   // Update tool history in state
-  state.withState((s) => {
-    const summary = formatToolLog(
-      toolName,
-      toolInput as Record<string, unknown>,
-      toolResponse,
-    );
-    s.toolHistory.push({
-      toolName,
-      summary,
-      timestamp: Date.now(),
+  try {
+    state.withState((s) => {
+      const summary = formatToolLog(
+        toolName,
+        toolInput as Record<string, unknown>,
+      );
+      s.toolHistory.push({
+        toolName,
+        summary,
+        timestamp: Date.now(),
+      });
+      if (s.toolHistory.length > 15) {
+        s.toolHistory = s.toolHistory.slice(-15);
+      }
     });
-    // Keep only the last 15 entries
-    if (s.toolHistory.length > 15) {
-      s.toolHistory = s.toolHistory.slice(-15);
-    }
-  });
+  } catch {
+    // State update is best-effort
+  }
 
   // If this was a bash command involving git, refresh git state
   if (config.features.gitIntegration && toolName === 'Bash') {
