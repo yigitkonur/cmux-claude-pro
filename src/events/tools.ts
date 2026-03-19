@@ -143,18 +143,24 @@ export async function onPostToolUse(
 ): Promise<void> {
   const { tool_name: toolName, tool_input: toolInput } = event;
 
-  // Safely extract tool_response — it can be enormous for image reads (binary blobs).
+  // Safely extract tool_response — it can be enormous (image blobs, large JSON).
   // Truncate to prevent socket command overflow and state file bloat.
   let toolResponse: unknown = undefined;
   try {
     const raw = event.tool_response;
-    if (typeof raw === 'string' && raw.length > 2000) {
-      toolResponse = raw.slice(0, 2000);
+    if (raw == null) {
+      toolResponse = undefined;
+    } else if (typeof raw === 'string') {
+      toolResponse = raw.length > 2000 ? raw.slice(0, 2000) : raw;
+    } else if (typeof raw === 'object') {
+      // Stringify and truncate large objects (TaskCreate/TaskUpdate responses, etc.)
+      const s = JSON.stringify(raw);
+      toolResponse = s.length > 2000 ? s.slice(0, 2000) : raw;
     } else {
       toolResponse = raw;
     }
   } catch {
-    // Ignore — response is not critical for logging
+    toolResponse = undefined;
   }
 
   // Log the tool result
