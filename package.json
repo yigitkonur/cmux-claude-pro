@@ -1,0 +1,25 @@
+{
+  "name": "cc-cmux",
+  "version": "1.0.0",
+  "description": "The definitive Claude Code ↔ cmux integration — status pills, progress bars, sidebar logs, notifications, AI tab titles, git integration",
+  "type": "module",
+  "bin": {
+    "cc-cmux": "bin/cc-cmux.mjs"
+  },
+  "main": "dist/handler.cjs",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "node --test test/*.test.mjs",
+    "postbuild": "cp dist/handler.cjs dist/tab-title-worker.cjs ~/.cc-cmux/ 2>/dev/null || true"
+  },
+  "keywords": ["claude-code", "cmux", "hooks", "terminal", "sidebar"],
+  "license": "MIT",
+  "devDependencies": {
+    "@clack/prompts": "^0.11.0",
+    "picocolors": "^1.1.1",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  }
+}

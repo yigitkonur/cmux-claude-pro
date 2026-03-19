@@ -1,0 +1,41 @@
+import { defineConfig } from 'tsup';
+
+export default defineConfig([
+  {
+    entry: { handler: 'src/handler.ts' },
+    format: ['cjs'],
+    outDir: 'dist',
+    target: 'node20',
+    platform: 'node',
+    bundle: true,
+    minify: false,
+    sourcemap: false,
+    noExternal: [/.*/],
+    clean: true,
+    banner: { js: '#!/usr/bin/env node' },
+  },
+  {
+    entry: { 'tab-title-worker': 'src/tab-title-worker.ts' },
+    format: ['cjs'],
+    outDir: 'dist',
+    target: 'node20',
+    platform: 'node',
+    bundle: true,
+    minify: false,
+    sourcemap: false,
+    noExternal: [/.*/],
+    clean: false,
+  },
+  {
+    entry: { installer: 'src/installer/index.ts' },
+    format: ['esm'],
+    outDir: 'dist',
+    outExtension: () => ({ js: '.mjs' }),
+    target: 'node20',
+    platform: 'node',
+    bundle: true,
+    minify: false,
+    sourcemap: false,
+    clean: false,
+  },
+]);
