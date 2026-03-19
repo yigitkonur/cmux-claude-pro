@@ -391,10 +391,10 @@ fi
 ```
 Host myserver
   RemoteForward /tmp/cmux-fwd.sock /tmp/cmux-local.sock
-  SendEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID
+  SendEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID
 ```
 
-`SendEnv` forwards the correct workspace/surface IDs from each tab's environment directly through SSH — no shared env file that goes stale.
+`SendEnv` forwards the correct cmux identity vars from each tab's environment directly through SSH — no shared env file that goes stale.
 
 **step 3 — remote machine:** run the setup script (handles sshd config + shell profile):
 
@@ -406,7 +406,7 @@ or manually:
 
 ```bash
 # accept cmux env vars from SSH + allow socket reuse
-echo "AcceptEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID" | sudo tee -a /etc/ssh/sshd_config
+echo "AcceptEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID" | sudo tee -a /etc/ssh/sshd_config
 echo "StreamLocalBindUnlink yes" | sudo tee -a /etc/ssh/sshd_config
 # macOS:
 sudo launchctl kickstart -k system/com.openssh.sshd

@@ -57,11 +57,11 @@ if grep -q "AcceptEnv.*CMUX" "$SSHD_CONFIG" 2>/dev/null; then
   echo "  [ok] sshd already accepts CMUX env vars"
 else
   echo "  [..] configuring sshd to accept CMUX env vars (needs sudo)..."
-  if echo "AcceptEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID" | sudo tee -a "$SSHD_CONFIG" >/dev/null 2>&1; then
+  if echo "AcceptEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID" | sudo tee -a "$SSHD_CONFIG" >/dev/null 2>&1; then
     echo "  [ok] added AcceptEnv to $SSHD_CONFIG"
   else
     echo "  [!!] could not write to $SSHD_CONFIG — run manually:"
-    echo "       echo \"AcceptEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID\" | sudo tee -a $SSHD_CONFIG"
+    echo "       echo \"AcceptEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID\" | sudo tee -a $SSHD_CONFIG"
   fi
 fi
 
@@ -116,7 +116,7 @@ echo ""
 echo "  2. add to your SSH config (~/.ssh/config):"
 echo "     Host $(hostname)"
 echo "       RemoteForward /tmp/cmux-fwd.sock /tmp/cmux-local.sock"
-echo "       SendEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID"
+echo "       SendEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID"
 echo ""
 echo "  3. for ET (eternal terminal): write env file before connecting:"
 echo "     printf 'export CMUX_WORKSPACE_ID=%s\nexport CMUX_SURFACE_ID=%s\n' \\"
