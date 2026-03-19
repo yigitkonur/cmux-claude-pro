@@ -197,47 +197,63 @@ restart claude code after adding hooks.
 
 ## try it yourself
 
-paste this into a fresh claude code session to see every feature in action. each step pauses so you can watch the sidebar update in real time.
+paste this into a fresh claude code session. works in any directory — even an empty folder. creates temp files, exercises every hook, then offers to clean up after itself.
 
 ```
-run this test script step by step. after each step, wait 2 seconds before
-proceeding to the next. announce each step number before executing it.
+run this test script step by step. wait 2 seconds between each step so i can
+watch the cmux sidebar update. announce each step number before executing it.
 
-step 1 — READ
-read the file package.json (first 5 lines only)
+step 1 — WRITE (creates a test file)
+create a file /tmp/cmux-test-alpha.txt with this content:
+"hello from cmux-claude-pro
+this file tests the sidebar integration
+TODO: verify grep finds this line
+export const status = 'working';"
 
-step 2 — GREP
-search for "export" in the src/ directory and show count
+step 2 — WRITE (creates a second test file)
+create a file /tmp/cmux-test-beta.txt with this content:
+"second test file for cmux-claude-pro
+export function demo() { return true; }
+TODO: clean up after test"
 
-step 3 — GLOB
-find all .ts files in src/features/
+step 3 — READ (reads back the first file)
+read the file /tmp/cmux-test-alpha.txt
 
-step 4 — WRITE
-create a file /tmp/cc-cmux-test.txt with content "cmux-claude-pro works"
+step 4 — GREP (searches across both files)
+search for the pattern "TODO" in /tmp/cmux-test-alpha.txt and /tmp/cmux-test-beta.txt
 
-step 5 — BASH
-run: echo "hello from cmux-claude-pro"
+step 5 — GLOB (finds the test files)
+find all files matching /tmp/cmux-test-*.txt
 
-step 6 — BASH with output
-run: ls -la dist/
+step 6 — EDIT (modifies the first file)
+in /tmp/cmux-test-alpha.txt, replace "TODO: verify grep finds this line" with "DONE: grep found this line"
 
-step 7 — READ FAILURE
-try to read /tmp/this-file-does-not-exist-12345.txt
+step 7 — BASH (runs a command)
+run: cat /tmp/cmux-test-alpha.txt | wc -l
 
-step 8 — TASK
-create a task called "sidebar test" and immediately complete it
+step 8 — BASH (another command)
+run: echo "cmux-claude-pro sidebar test — all tools working"
 
-step 9 — SUBAGENT
-use an Explore agent to count lines in src/handler.ts
+step 9 — READ FAILURE (triggers warning log)
+try to read /tmp/cmux-test-this-does-not-exist.txt
 
-step 10 — MULTI-TOOL
-read these 3 files in parallel (first 3 lines each):
-- src/features/status.ts
-- src/features/logger.ts
-- src/features/git.ts
+step 10 — TASK (creates and completes a task)
+create a task called "cmux sidebar verification" and immediately mark it as completed
 
-step 11 — DONE
-print "test complete — all sidebar features verified"
+step 11 — SUBAGENT (spawns an explore agent)
+use an Explore agent to count how many lines are in /tmp/cmux-test-alpha.txt
+
+step 12 — MULTI-TOOL (parallel reads)
+read these 2 files in parallel:
+- /tmp/cmux-test-alpha.txt
+- /tmp/cmux-test-beta.txt
+
+step 13 — CLEANUP OFFER
+list all files that were created during this test:
+- /tmp/cmux-test-alpha.txt
+- /tmp/cmux-test-beta.txt
+ask me: "test complete — all cmux-claude-pro sidebar features verified! want me to delete the test files?"
+if i say yes, delete them. if i say no, leave them.
 ```
 
 ### what you'll see
@@ -246,17 +262,19 @@ print "test complete — all sidebar features verified"
 |---|---|---|---|---|
 | start | `Ready` (green) | — | — | — |
 | prompt | `Thinking...` (gold) | cleared | — | — |
-| 1 | `Working: Read: package.json` | `0.09 1 tool` | `Read: package.json` | — |
-| 2 | `Working: Grep: "export"` | `0.17 2 tools` | `Grep: "export" → N matches` | — |
-| 3 | `Working: Glob: **/*.ts` | `0.23 3 tools` | `Glob: **/*.ts` | — |
-| 4 | `Working: Write: cc-cmux-test.txt` | `0.29 4 tools` | `Write: cc-cmux-test.txt` | — |
-| 5 | `Working: Bash: echo "hello...` | `0.33 5 tools` | `Bash: \`echo "hello...\`` | — |
-| 6 | `Working: Bash: ls -la dist/` | `0.38 6 tools` | `Bash: \`ls -la dist/\`` | — |
-| 7 | `Working: Read: this-file...` | `0.41 7 tools` | `⚠ FAIL Read: this-file...` | — |
-| 8 | `Working: TaskCreate` | `0.47 8-9 tools` | `TaskCreate` + `Task completed` | — |
-| 9 | `Working (1 agent): ...` | `0.50 10 tools` | `Agent spawned: Explore` → `Agent done` | — |
-| 10 | `Working: Read: ...` | `0.57 13 tools` | 3x `Read: ...` entries | — |
-| 11 | `Done` (green) | `1.00 Complete` | — | "Done — test complete..." |
+| 1 | `Working: Write: cmux-test-alpha.txt` | `0.09 1 tool` | `Write: cmux-test-alpha.txt` | — |
+| 2 | `Working: Write: cmux-test-beta.txt` | `0.17 2 tools` | `Write: cmux-test-beta.txt` | — |
+| 3 | `Working: Read: cmux-test-alpha.txt` | `0.23 3 tools` | `Read: cmux-test-alpha.txt` | — |
+| 4 | `Working: Grep: "TODO"` | `0.29 4 tools` | `Grep: "TODO" → 2 matches` | — |
+| 5 | `Working: Glob: cmux-test-*` | `0.33 5 tools` | `Glob: cmux-test-*.txt` | — |
+| 6 | `Working: Edit: cmux-test-alpha.txt` | `0.38 6 tools` | `Edit: cmux-test-alpha.txt` | — |
+| 7 | `Working: Bash: cat /tmp/cmux...` | `0.41 7 tools` | `Bash: \`cat /tmp/cmux...\`` | — |
+| 8 | `Working: Bash: echo "cmux...` | `0.44 8 tools` | `Bash: \`echo "cmux-claude...\`` | — |
+| 9 | — | `0.47 9 tools` | `⚠ FAIL Read: cmux-test-this...` | — |
+| 10 | `Working: TaskCreate` | `0.50 10-11 tools` | `TaskCreate` + `Task completed` | — |
+| 11 | `Working (1 agent): ...` | `0.55 12 tools` | `Agent spawned` → `Agent done` | — |
+| 12 | `Working: Read: ...` | `0.58 14 tools` | 2x `Read: ...` entries | — |
+| 13 | `Done` (green) | `1.00 Complete` | — | "Done — test complete..." |
 
 ## configuration
 
