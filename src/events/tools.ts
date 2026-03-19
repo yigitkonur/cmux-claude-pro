@@ -143,21 +143,25 @@ export async function onPostToolUse(
 ): Promise<void> {
   const { tool_name: toolName, tool_input: toolInput } = event;
 
-  // Safely extract tool_response — it can be enormous (image blobs, large JSON).
-  // Truncate to prevent socket command overflow and state file bloat.
+  // Safely handle tool_response — can be enormous (image blobs, large JSON, circular refs).
+  // We only need it for log formatting (match counts, exit codes), so keep it minimal.
   let toolResponse: unknown = undefined;
   try {
     const raw = event.tool_response;
     if (raw == null) {
       toolResponse = undefined;
     } else if (typeof raw === 'string') {
-      toolResponse = raw.length > 2000 ? raw.slice(0, 2000) : raw;
+      toolResponse = { content: raw.length > 1000 ? raw.slice(0, 1000) : raw };
     } else if (typeof raw === 'object') {
-      // Stringify and truncate large objects (TaskCreate/TaskUpdate responses, etc.)
-      const s = JSON.stringify(raw);
-      toolResponse = s.length > 2000 ? s.slice(0, 2000) : raw;
-    } else {
-      toolResponse = raw;
+      // Extract only the fields we actually use in formatToolLog helpers
+      const r = raw as Record<string, unknown>;
+      toolResponse = {
+        content: typeof r['content'] === 'string' ? r['content'].slice(0, 1000) : undefined,
+        exitCode: r['exitCode'] ?? r['exit_code'],
+        matchCount: r['matchCount'] ?? r['match_count'],
+        fileCount: r['fileCount'] ?? r['file_count'],
+        files: Array.isArray(r['files']) ? r['files'].length : undefined,
+      };
     }
   } catch {
     toolResponse = undefined;
