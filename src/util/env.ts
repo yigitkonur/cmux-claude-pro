@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 
 const FWD_SOCK = '/tmp/cmux-fwd.sock';
 
@@ -18,38 +18,71 @@ function querySocket(socketPath: string, command: string, timeoutMs = 500): stri
 }
 
 /**
- * Load cmux env for SSH/remote sessions.
+ * Validate a workspace ID exists in cmux.
+ */
+function isValidWorkspace(socketPath: string, wid: string): boolean {
+  if (!wid) return false;
+  const result = querySocket(socketPath, `sidebar_state --tab=${wid}`);
+  return !!(result && !result.startsWith('ERROR') && !result.includes('not found'));
+}
+
+/**
+ * Load cmux env. Handles both local and SSH/remote sessions.
  *
- * For SSH: the socket is forwarded to /tmp/cmux-fwd.sock.
- * We query current_workspace directly — this always returns the
- * focused workspace, which is the SSH tab when the user is looking at it.
+ * Local: CMUX_SOCKET_PATH + CMUX_WORKSPACE_ID set by cmux → use them.
+ * SSH with SendEnv/AcceptEnv: correct workspace ID forwarded per-connection.
+ * ET/mosh: env file at /tmp/cmux-fwd.env written before connection.
  *
- * The env file is NOT used for workspace ID because it goes stale
- * every time you open a new tab or switch workspaces.
+ * IMPORTANT: current_workspace returns the FOCUSED workspace, not the
+ * workspace containing the SSH tab. We only use it as absolute last resort.
  */
 function loadForwardedEnv(): void {
-  // Already have both env vars — local cmux session
-  if (process.env['CMUX_SOCKET_PATH'] && process.env['CMUX_WORKSPACE_ID']) {
+  const socketPath = process.env['CMUX_SOCKET_PATH'] || '';
+  const workspaceId = process.env['CMUX_WORKSPACE_ID'] || '';
+
+  // Case 1: local cmux with valid workspace ID (not forwarded socket)
+  if (socketPath && workspaceId && socketPath !== FWD_SOCK) {
     return;
   }
 
-  // Check for forwarded socket
-  if (!existsSync(FWD_SOCK)) {
+  // Case 2: forwarded socket exists (SSH/ET session)
+  if (existsSync(FWD_SOCK)) {
+    process.env['CMUX_SOCKET_PATH'] = FWD_SOCK;
+
+    // Workspace ID already set (via SSH AcceptEnv or env file in .zshrc)
+    if (workspaceId) {
+      // Trust it — it came from the originating tab's environment
+      return;
+    }
+
+    // No workspace ID at all — last resort: try env file directly
+    // (handles case where .zshrc detection didn't run, e.g. non-login shell)
+    try {
+      const { readFileSync } = require('node:fs');
+      const envContent = readFileSync('/tmp/cmux-fwd.env', 'utf-8');
+      const widMatch = envContent.match(/CMUX_WORKSPACE_ID=(\S+)/);
+      const sidMatch = envContent.match(/CMUX_SURFACE_ID=(\S+)/);
+      if (widMatch?.[1]) {
+        process.env['CMUX_WORKSPACE_ID'] = widMatch[1];
+      }
+      if (sidMatch?.[1] && !process.env['CMUX_SURFACE_ID']) {
+        process.env['CMUX_SURFACE_ID'] = sidMatch[1];
+      }
+    } catch {
+      // No env file — fall back to current_workspace (may target wrong tab)
+      const wid = querySocket(FWD_SOCK, 'current_workspace');
+      if (wid && !wid.startsWith('ERROR')) {
+        process.env['CMUX_WORKSPACE_ID'] = wid;
+      } else {
+        delete process.env['CMUX_WORKSPACE_ID'];
+      }
+    }
     return;
   }
 
-  // Verify socket is alive
-  const pong = querySocket(FWD_SOCK, 'ping');
-  if (pong !== 'PONG') {
+  // Case 3: no forwarded socket — check if env vars point to valid socket
+  if (socketPath && existsSync(socketPath) && workspaceId) {
     return;
-  }
-
-  process.env['CMUX_SOCKET_PATH'] = FWD_SOCK;
-
-  // Always query current_workspace — it's the only reliable source
-  const wid = querySocket(FWD_SOCK, 'current_workspace');
-  if (wid && !wid.startsWith('ERROR')) {
-    process.env['CMUX_WORKSPACE_ID'] = wid;
   }
 }
 
