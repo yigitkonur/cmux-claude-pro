@@ -9,6 +9,7 @@ import type { CmuxSocket } from '../cmux/socket.js';
 import type { CmuxCommands } from '../cmux/commands.js';
 import type { StateManager } from '../state/manager.js';
 import type { CcCmuxConfig } from '../config/types.js';
+import type { StatusPhase } from '../state/types.js';
 import { STATUS_DISPLAY, formatStatusValue } from '../features/status.js';
 import { LOG_SOURCE } from '../features/logger.js';
 
@@ -81,19 +82,21 @@ export async function onPostCompact(
 
   // Restore the status that was active before compaction
   const s = state.read();
-  const restoreTo = s.preCompactStatus || (s.isInTurn ? 'working' : 'done');
+  const restoreTo: StatusPhase = s.preCompactStatus && s.preCompactStatus in STATUS_DISPLAY
+    ? s.preCompactStatus
+    : (s.isInTurn ? 'working' : 'done');
 
   // Clear saved pre-compact status
   state.withState((st) => {
     st.preCompactStatus = null;
-    st.currentStatus = restoreTo as any;
+    st.currentStatus = restoreTo;
   });
 
   if (config.features.statusPills) {
-    const display = STATUS_DISPLAY[restoreTo as keyof typeof STATUS_DISPLAY] || STATUS_DISPLAY.working;
+    const display = STATUS_DISPLAY[restoreTo];
     try {
       socket.fire(
-        cmd.setStatus('claude_code', formatStatusValue(restoreTo as any), {
+        cmd.setStatus('claude_code', formatStatusValue(restoreTo), {
           icon: display.icon,
           color: display.color,
         }),

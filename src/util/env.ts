@@ -1,13 +1,14 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 
 const FWD_SOCK = '/tmp/cmux-fwd.sock';
 
 /**
  * Query the cmux socket synchronously via socat.
+ * Used only as a last-resort fallback in loadForwardedEnv().
  */
 function querySocket(socketPath: string, command: string, timeoutMs = 500): string {
   try {
-    const { execSync } = require('node:child_process');
     return execSync(
       `echo '${command}' | socat - UNIX-CONNECT:"${socketPath}" 2>/dev/null`,
       { encoding: 'utf-8', timeout: timeoutMs },
@@ -15,15 +16,6 @@ function querySocket(socketPath: string, command: string, timeoutMs = 500): stri
   } catch {
     return '';
   }
-}
-
-/**
- * Validate a workspace ID exists in cmux.
- */
-function isValidWorkspace(socketPath: string, wid: string): boolean {
-  if (!wid) return false;
-  const result = querySocket(socketPath, `sidebar_state --tab=${wid}`);
-  return !!(result && !result.startsWith('ERROR') && !result.includes('not found'));
 }
 
 /**
@@ -58,7 +50,6 @@ function loadForwardedEnv(): void {
     // No workspace ID at all — last resort: try env file directly
     // (handles case where .zshrc detection didn't run, e.g. non-login shell)
     try {
-      const { readFileSync } = require('node:fs');
       const envContent = readFileSync('/tmp/cmux-fwd.env', 'utf-8');
       const widMatch = envContent.match(/CMUX_WORKSPACE_ID=(\S+)/);
       const sidMatch = envContent.match(/CMUX_SURFACE_ID=(\S+)/);

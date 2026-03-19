@@ -5,7 +5,6 @@
  * when Claude finishes responding, and when it fails.
  */
 
-import { spawn } from 'node:child_process';
 import type { CmuxSocket } from '../cmux/socket.js';
 import type { CmuxCommands } from '../cmux/commands.js';
 import type { StateManager } from '../state/manager.js';
@@ -65,7 +64,7 @@ export async function onUserPromptSubmit(
 
   if (commands.length > 0) {
     try {
-      await socket.sendBatch(commands);
+      socket.fireAll(commands);
     } catch {
       // Non-critical
     }
@@ -120,7 +119,7 @@ export async function onStop(
   }
 
   try {
-    await socket.sendBatch(commands);
+    socket.fireAll(commands);
   } catch {
     // Non-critical
   }
@@ -149,26 +148,10 @@ export async function onStop(
     }
   }
 
-  // Clear progress after 3 seconds (background)
-  if (config.features.progress) {
-    try {
-      const child = spawn(
-        '/bin/sh',
-        ['-c', `sleep 3`],
-        { stdio: 'ignore', detached: true },
-      );
-      child.on('exit', () => {
-        try {
-          socket.fire(cmd.clearProgress());
-        } catch {
-          // Non-critical
-        }
-      });
-      child.unref();
-    } catch {
-      // Non-critical — progress will remain until next turn
-    }
-  }
+  // Progress stays at 100% "Complete" until the next UserPromptSubmit clears it.
+  // Previously tried to clear after 3s via a detached child process, but the
+  // parent exits in 50ms so the callback never fires. The 100% "Complete" state
+  // is not harmful — it correctly shows the turn is done.
 }
 
 /**
@@ -202,7 +185,7 @@ export async function onStopFailure(
 
   if (commands.length > 0) {
     try {
-      await socket.sendBatch(commands);
+      socket.fireAll(commands);
     } catch {
       // Non-critical
     }

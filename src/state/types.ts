@@ -38,7 +38,7 @@ export interface SessionState {
   currentTabTitle: string | null;
   model: string | null;
   /** Status saved before compaction, restored in PostCompact */
-  preCompactStatus: string | null;
+  preCompactStatus: StatusPhase | null;
   isInTurn: boolean;
   turnNumber: number;
   turnStartTime: number;

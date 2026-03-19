@@ -117,7 +117,7 @@ export async function onSessionStart(
 
   // Send all initialization commands
   try {
-    await socket.sendBatch(commands);
+    socket.fireAll(commands);
   } catch {
     // Non-critical
   }
@@ -157,7 +157,7 @@ export async function onSessionEnd(
   commands.push(cmd.clearMeta('remote_cwd'));
 
   try {
-    await socket.sendBatch(commands);
+    socket.fireAll(commands);
   } catch {
     // Non-critical
   }

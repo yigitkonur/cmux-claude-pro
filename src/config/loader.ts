@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { CcCmuxConfig } from './types.js';
@@ -82,13 +82,23 @@ function writeCache(config: CcCmuxConfig): void {
  * to specify the keys they want to override.
  */
 export function loadConfig(): CcCmuxConfig {
-  // Tier 1: cache (fast path for hot hooks)
+  // Tier 1: cache (fast path for hot hooks — invalidated if config file is newer)
   const cached = tryReadJson(CACHE_FILE);
   if (cached) {
-    return deepMerge(
-      DEFAULT_CONFIG as unknown as Record<string, unknown>,
-      cached,
-    ) as unknown as CcCmuxConfig;
+    let cacheValid = true;
+    try {
+      const cacheMtime = statSync(CACHE_FILE).mtimeMs;
+      const configMtime = statSync(CONFIG_FILE).mtimeMs;
+      if (configMtime > cacheMtime) cacheValid = false;
+    } catch {
+      // If stat fails, trust the cache
+    }
+    if (cacheValid) {
+      return deepMerge(
+        DEFAULT_CONFIG as unknown as Record<string, unknown>,
+        cached,
+      ) as unknown as CcCmuxConfig;
+    }
   }
 
   // Tier 2: user config file
