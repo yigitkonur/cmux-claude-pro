@@ -133,4 +133,14 @@ export class CmuxCommands {
   sendKeyToSurface(surfaceRef: string, key: string): string {
     return `send_key --surface=${surfaceRef} ${q(key)}`;
   }
+
+  /** Mark workspace tab as unread (visual attention indicator). */
+  markUnread(): string {
+    return `workspace_action --action=mark_unread${this.tab()}`;
+  }
+
+  /** Mark workspace tab as read (clear unread indicator). */
+  markRead(): string {
+    return `workspace_action --action=mark_read${this.tab()}`;
+  }
 }

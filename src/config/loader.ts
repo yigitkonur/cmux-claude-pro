@@ -94,6 +94,8 @@ export function loadConfig(): CcCmuxConfig {
       // If stat fails, trust the cache
     }
     if (cacheValid) {
+      // Merge cached config over defaults for forward-compatibility: if DEFAULT_CONFIG
+      // gains new keys in a code update, they appear even with an older cache file.
       return deepMerge(
         DEFAULT_CONFIG as unknown as Record<string, unknown>,
         cached,

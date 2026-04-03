@@ -8,19 +8,17 @@
  * PostToolUseFailure logs the error.
  */
 
-import type { CmuxSocket } from '../cmux/socket.js';
-import type { CmuxCommands } from '../cmux/commands.js';
-import type { StateManager } from '../state/manager.js';
-import type { CcCmuxConfig } from '../config/types.js';
-import type { CmuxEnv } from '../util/env.js';
+import type { HandlerContext } from './context.js';
 import type { PreToolUseInput, PostToolUseInput, PostToolUseFailureInput } from './types.js';
 import { formatToolLabel } from '../util/tool-format.js';
-import { STATUS_DISPLAY, resolveStatus, formatStatusValue } from '../features/status.js';
+import { resolveStatus } from '../features/status.js';
 import { formatToolLog, getLogLevel, LOG_SOURCE } from '../features/logger.js';
 import { calculateProgress, formatProgressLabel } from '../state/progress.js';
 import { isReadOnlyAgent, spawnAgentPane, getNextDirection } from '../features/agents.js';
 import { detectGitInfo, isGitCommand } from '../features/git.js';
 import { CMUX_BIN } from '../util/env.js';
+import { fireStatus } from '../cmux/helpers.js';
+import { TOOL_HISTORY_MAX, RESPONSE_TRUNCATE } from '../constants.js';
 
 /**
  * Handle PreToolUse — update status to "working" and set progress.
@@ -30,12 +28,9 @@ import { CMUX_BIN } from '../util/env.js';
  */
 export async function onPreToolUse(
   event: PreToolUseInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
-  env: CmuxEnv,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config, env } = ctx;
   const { tool_name: toolName, tool_input: toolInput } = event;
 
   // ---- Agent interception ----
@@ -64,6 +59,7 @@ export async function onPreToolUse(
         prompt,
         env.surfaceId,
         direction,
+        s.model,
       );
 
       if (result) {
@@ -111,16 +107,7 @@ export async function onPreToolUse(
 
     // Fire-and-forget: no await — speed is critical on PreToolUse
     if (config.features.statusPills) {
-      const display = STATUS_DISPLAY.working;
-      const statusValue = formatStatusValue(
-        'working',
-        label,
-        s.activeSubagents > 0 ? s.activeSubagents : undefined,
-      );
-      socket.fire(cmd.setStatus('claude_code', statusValue, {
-        icon: display.icon,
-        color: display.color,
-      }));
+      fireStatus(socket, cmd, 'working', label, s.activeSubagents > 0 ? s.activeSubagents : undefined);
     }
 
     if (config.features.progress) {
@@ -136,11 +123,9 @@ export async function onPreToolUse(
  */
 export async function onPostToolUse(
   event: PostToolUseInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config, env } = ctx;
   const { tool_name: toolName, tool_input: toolInput } = event;
 
   // Safely handle tool_response — can be enormous (image blobs, large JSON, circular refs).
@@ -151,12 +136,12 @@ export async function onPostToolUse(
     if (raw == null) {
       toolResponse = undefined;
     } else if (typeof raw === 'string') {
-      toolResponse = { content: raw.length > 1000 ? raw.slice(0, 1000) : raw };
+      toolResponse = { content: raw.length > RESPONSE_TRUNCATE ? raw.slice(0, RESPONSE_TRUNCATE) : raw };
     } else if (typeof raw === 'object') {
       // Extract only the fields we actually use in formatToolLog helpers
       const r = raw as Record<string, unknown>;
       toolResponse = {
-        content: typeof r['content'] === 'string' ? r['content'].slice(0, 1000) : undefined,
+        content: typeof r['content'] === 'string' ? r['content'].slice(0, RESPONSE_TRUNCATE) : undefined,
         exitCode: r['exitCode'] ?? r['exit_code'],
         matchCount: r['matchCount'] ?? r['match_count'],
         fileCount: r['fileCount'] ?? r['file_count'],
@@ -200,8 +185,8 @@ export async function onPostToolUse(
         summary,
         timestamp: Date.now(),
       });
-      if (s.toolHistory.length > 15) {
-        s.toolHistory = s.toolHistory.slice(-15);
+      if (s.toolHistory.length > TOOL_HISTORY_MAX) {
+        s.toolHistory = s.toolHistory.slice(-TOOL_HISTORY_MAX);
       }
     });
   } catch {
@@ -233,11 +218,9 @@ export async function onPostToolUse(
  */
 export async function onPostToolUseFailure(
   event: PostToolUseFailureInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config, env } = ctx;
   if (!config.features.logs) return;
 
   const { tool_name: toolName, tool_input: toolInput, error } = event;

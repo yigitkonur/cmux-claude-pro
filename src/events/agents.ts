@@ -5,12 +5,10 @@
  * status to reflect agent activity.
  */
 
-import type { CmuxSocket } from '../cmux/socket.js';
-import type { CmuxCommands } from '../cmux/commands.js';
-import type { StateManager } from '../state/manager.js';
-import type { CcCmuxConfig } from '../config/types.js';
 import type { SubagentStartInput, SubagentStopInput } from './types.js';
-import { STATUS_DISPLAY, formatStatusValue } from '../features/status.js';
+import type { HandlerContext } from './context.js';
+import { fireStatus } from '../cmux/helpers.js';
+import { AGENT_KEY } from '../constants.js';
 import { LOG_SOURCE } from '../features/logger.js';
 
 /**
@@ -18,11 +16,10 @@ import { LOG_SOURCE } from '../features/logger.js';
  */
 export async function onSubagentStart(
   event: SubagentStartInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config } = ctx;
+
   if (!config.features.subagentTracking) return;
 
   const agentType = event.agent_type ?? 'agent';
@@ -34,34 +31,19 @@ export async function onSubagentStart(
 
   // Log the agent spawn
   if (config.features.logs) {
-    try {
-      socket.fire(
-        cmd.log(`Agent spawned: ${agentType}`, {
-          level: 'info',
-          source: 'claude',
-        }),
-      );
-    } catch {
-      // Non-critical
-    }
+    socket.fire(
+      cmd.log(`Agent spawned: ${agentType}`, {
+        level: 'info',
+        source: LOG_SOURCE,
+      }),
+    );
   }
 
   // Update status with agent count if currently working
   if (config.features.statusPills) {
     const s = state.read();
     if (s.currentStatus === 'working') {
-      const display = STATUS_DISPLAY.working;
-      try {
-        socket.fire(
-          cmd.setStatus(
-            'claude_code',
-            formatStatusValue('working', undefined, s.activeSubagents),
-            { icon: display.icon, color: display.color },
-          ),
-        );
-      } catch {
-        // Non-critical
-      }
+      fireStatus(socket, cmd, 'working', undefined, s.activeSubagents);
     }
   }
 }
@@ -71,11 +53,10 @@ export async function onSubagentStart(
  */
 export async function onSubagentStop(
   event: SubagentStopInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config } = ctx;
+
   if (!config.features.subagentTracking) return;
 
   const agentType = event.agent_type ?? 'agent';
@@ -86,15 +67,11 @@ export async function onSubagentStop(
 
   // Log agent completion (info level, not success — avoids confusion with main "Done")
   if (config.features.logs) {
-    try {
-      socket.fire(
-        cmd.log(`Subagent done: ${agentType}`, {
-          level: 'info',
-          source: 'claude',
-        }),
-      );
-    } catch {
-      // Non-critical
-    }
+    socket.fire(
+      cmd.log(`Subagent done: ${agentType}`, {
+        level: 'info',
+        source: LOG_SOURCE,
+      }),
+    );
   }
 }

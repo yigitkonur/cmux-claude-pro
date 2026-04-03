@@ -5,31 +5,24 @@
  * SessionEnd cleans up state and sidebar artifacts.
  */
 
-import type { CmuxSocket } from '../cmux/socket.js';
-import type { CmuxCommands } from '../cmux/commands.js';
-import type { StateManager } from '../state/manager.js';
-import type { CcCmuxConfig } from '../config/types.js';
-import type { CmuxEnv } from '../util/env.js';
+import type { HandlerContext } from './context.js';
 import type { SessionStartInput, SessionEndInput } from './types.js';
 import { STATUS_DISPLAY, formatStatusValue } from '../features/status.js';
 import { detectGitInfo } from '../features/git.js';
 import { deleteTabTitle } from '../features/tab-title.js';
 import { LOG_SOURCE } from '../features/logger.js';
+import { AGENT_KEY, META_HOST, META_REMOTE_CWD, STALE_SESSION_MS } from '../constants.js';
 import { hostname } from 'node:os';
-
-const STALE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * Handle SessionStart — initialize the session state and sidebar.
  */
 export async function onSessionStart(
   event: SessionStartInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
-  env: CmuxEnv,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config, env } = ctx;
+
   // Create and populate initial state
   const s = state.createDefault();
   s.sessionId = event.session_id;
@@ -59,7 +52,7 @@ export async function onSessionStart(
   // Register agent PID — enables cmux's 30s crash recovery auto-cleanup
   // and suppresses raw OSC terminal notifications for this workspace
   const pid = process.ppid || process.pid;
-  commands.push(cmd.setAgentPid('claude_code', pid));
+  commands.push(cmd.setAgentPid(AGENT_KEY, pid));
 
   // Clear previous state
   commands.push(cmd.clearLog());
@@ -69,7 +62,7 @@ export async function onSessionStart(
   if (config.features.statusPills) {
     const display = STATUS_DISPLAY.ready;
     commands.push(
-      cmd.setStatus('claude_code', formatStatusValue('ready'), {
+      cmd.setStatus(AGENT_KEY, formatStatusValue('ready'), {
         icon: display.icon,
         color: display.color,
         pid,
@@ -91,13 +84,13 @@ export async function onSessionStart(
     const user = process.env['USER'] || process.env['LOGNAME'] || '';
     const hostLabel = user ? `${user}@${hostName}` : hostName;
     commands.push(
-      cmd.reportMeta('host', `${hostLabel} (ssh)`, { icon: 'network', color: '#F59E0B' }),
+      cmd.reportMeta(META_HOST, `${hostLabel} (ssh)`, { icon: 'network', color: '#F59E0B' }),
     );
 
     // Report the actual remote cwd
     if (event.cwd) {
       commands.push(
-        cmd.reportMeta('remote_cwd', event.cwd, { icon: 'folder', color: '#6B7280' }),
+        cmd.reportMeta(META_REMOTE_CWD, event.cwd, { icon: 'folder', color: '#6B7280' }),
       );
     }
 
@@ -109,22 +102,18 @@ export async function onSessionStart(
     }
   } else {
     // Local session — clear any stale SSH metadata from previous session
-    commands.push(cmd.clearMeta('host'));
-    commands.push(cmd.clearMeta('remote_cwd'));
+    commands.push(cmd.clearMeta(META_HOST));
+    commands.push(cmd.clearMeta(META_REMOTE_CWD));
   }
 
   // Model metadata removed — wastes sidebar space, already visible in Claude Code UI
 
   // Send all initialization commands
-  try {
-    socket.fireAll(commands);
-  } catch {
-    // Non-critical
-  }
+  socket.fireAll(commands);
 
   // Clean up stale state files from old sessions (background, non-blocking)
   try {
-    state.cleanStale(STALE_MAX_AGE_MS);
+    state.cleanStale(STALE_SESSION_MS);
   } catch {
     // Non-critical
   }
@@ -135,16 +124,15 @@ export async function onSessionStart(
  */
 export async function onSessionEnd(
   event: SessionEndInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config, env } = ctx;
+
   const commands: string[] = [];
 
   // Clear sidebar state (matches official cmux cleanup order)
-  commands.push(cmd.clearStatus('claude_code'));
-  commands.push(cmd.clearAgentPid('claude_code'));
+  commands.push(cmd.clearStatus(AGENT_KEY));
+  commands.push(cmd.clearAgentPid(AGENT_KEY));
   commands.push(cmd.clearNotifications());
   commands.push(cmd.clearProgress());
 
@@ -153,14 +141,10 @@ export async function onSessionEnd(
   }
 
   // Clear metadata
-  commands.push(cmd.clearMeta('host'));
-  commands.push(cmd.clearMeta('remote_cwd'));
+  commands.push(cmd.clearMeta(META_HOST));
+  commands.push(cmd.clearMeta(META_REMOTE_CWD));
 
-  try {
-    socket.fireAll(commands);
-  } catch {
-    // Non-critical
-  }
+  socket.fireAll(commands);
 
   // Delete state file
   try {

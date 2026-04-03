@@ -5,33 +5,29 @@
  * when Claude finishes responding, and when it fails.
  */
 
-import type { CmuxSocket } from '../cmux/socket.js';
-import type { CmuxCommands } from '../cmux/commands.js';
-import type { StateManager } from '../state/manager.js';
-import type { CcCmuxConfig } from '../config/types.js';
-import type { CmuxEnv } from '../util/env.js';
+import type { HandlerContext } from './context.js';
 import type { UserPromptSubmitInput, StopInput, StopFailureInput } from './types.js';
-import { STATUS_DISPLAY, formatStatusValue } from '../features/status.js';
 import { LOG_SOURCE } from '../features/logger.js';
 import { spawnTabTitleWorker, restoreTabTitle } from '../features/tab-title.js';
 import { CMUX_BIN } from '../util/env.js';
+import { statusCmd, notifyIfUnfocused } from '../cmux/helpers.js';
+import { TURN_HISTORY_MAX } from '../constants.js';
 
 /**
  * Handle UserPromptSubmit — transition to "Thinking" status, reset tool count.
  */
 export async function onUserPromptSubmit(
   event: UserPromptSubmitInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config, env } = ctx;
+
   state.withState((s) => {
-    // Save previous turn's tool count to history (keep last 5)
+    // Save previous turn's tool count to history (keep last TURN_HISTORY_MAX)
     if (s.toolUseCount > 0) {
       s.turnToolCounts.push(s.toolUseCount);
-      if (s.turnToolCounts.length > 5) {
-        s.turnToolCounts = s.turnToolCounts.slice(-5);
+      if (s.turnToolCounts.length > TURN_HISTORY_MAX) {
+        s.turnToolCounts = s.turnToolCounts.slice(-TURN_HISTORY_MAX);
       }
     }
 
@@ -48,14 +44,11 @@ export async function onUserPromptSubmit(
   // Clear stale notifications from previous turn (matches official cmux behavior)
   commands.push(cmd.clearNotifications());
 
+  // Mark notifications as read
+  commands.push(cmd.markRead());
+
   // Always set status to Thinking — clears any stuck "Needs input" / "Waiting"
-  const display = STATUS_DISPLAY.thinking;
-  commands.push(
-    cmd.setStatus('claude_code', formatStatusValue('thinking'), {
-      icon: display.icon,
-      color: display.color,
-    }),
-  );
+  commands.push(statusCmd(cmd, 'thinking'));
 
   // Clear progress for fresh start
   if (config.features.progress) {
@@ -63,11 +56,7 @@ export async function onUserPromptSubmit(
   }
 
   if (commands.length > 0) {
-    try {
-      socket.fireAll(commands);
-    } catch {
-      // Non-critical
-    }
+    socket.fireAll(commands);
   }
 
   // Restore tab title after a short delay (background, non-blocking)
@@ -85,12 +74,10 @@ export async function onUserPromptSubmit(
  */
 export async function onStop(
   event: StopInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
-  env: CmuxEnv,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config, env } = ctx;
+
   const s = state.read();
 
   // Update state
@@ -105,33 +92,19 @@ export async function onStop(
   commands.push(cmd.clearNotifications());
 
   // Always set status to Done (not gated by statusPills — this is a cleanup)
-  const display = STATUS_DISPLAY.done;
-  commands.push(
-    cmd.setStatus('claude_code', formatStatusValue('done'), {
-      icon: display.icon,
-      color: display.color,
-    }),
-  );
+  commands.push(statusCmd(cmd, 'done'));
 
   // Set progress to 100%
   if (config.features.progress) {
     commands.push(cmd.setProgress(1.0, 'Complete'));
   }
 
-  try {
-    socket.fireAll(commands);
-  } catch {
-    // Non-critical
-  }
+  socket.fireAll(commands);
 
   // Send targeted desktop notification if configured (like official cmux hooks)
   if (config.features.notifications && config.notifications.onStop) {
     const lastMsg = (event.last_assistant_message || 'Response complete').slice(0, 100);
-    try {
-      socket.fire(cmd.notifyTarget(env.workspaceId, env.surfaceId, 'Claude Code', 'Done', lastMsg));
-    } catch {
-      // Non-critical
-    }
+    await notifyIfUnfocused(socket, cmd, env, 'Done', lastMsg);
   }
 
   // Spawn AI tab title worker if enabled
@@ -159,12 +132,10 @@ export async function onStop(
  */
 export async function onStopFailure(
   event: StopFailureInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
-  env: CmuxEnv,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config, env } = ctx;
+
   state.withState((s) => {
     s.currentStatus = 'error';
     s.isInTurn = false;
@@ -174,29 +145,15 @@ export async function onStopFailure(
 
   // Set status to Error
   if (config.features.statusPills) {
-    const display = STATUS_DISPLAY.error;
-    commands.push(
-      cmd.setStatus('claude_code', formatStatusValue('error'), {
-        icon: display.icon,
-        color: display.color,
-      }),
-    );
+    commands.push(statusCmd(cmd, 'error'));
   }
 
   if (commands.length > 0) {
-    try {
-      socket.fireAll(commands);
-    } catch {
-      // Non-critical
-    }
+    socket.fireAll(commands);
   }
 
   // Send targeted error notification if configured
   if (config.features.notifications && config.notifications.onError) {
-    try {
-      socket.fire(cmd.notifyTarget(env.workspaceId, env.surfaceId, 'Claude Code', 'Error', 'Response failed'));
-    } catch {
-      // Non-critical
-    }
+    await notifyIfUnfocused(socket, cmd, env, 'Error', 'Response failed');
   }
 }

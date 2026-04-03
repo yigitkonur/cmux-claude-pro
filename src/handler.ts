@@ -16,6 +16,7 @@ import { CmuxCommands } from './cmux/commands.js';
 import { StateManager } from './state/manager.js';
 
 import type { AnyHookEventInput } from './events/types.js';
+import type { HandlerContext } from './events/context.js';
 
 // Event handlers
 import { onSessionStart, onSessionEnd } from './events/session.js';
@@ -24,6 +25,16 @@ import { onUserPromptSubmit, onStop, onStopFailure } from './events/flow.js';
 import { onSubagentStart, onSubagentStop } from './events/agents.js';
 import { onPreCompact, onPostCompact, onTaskCompleted, onWorktreeCreate } from './events/lifecycle.js';
 import { onNotification, onPermissionRequest } from './events/notifications.js';
+
+/** Parse stdin JSON into a typed event, returning null on any failure. */
+function parseEvent(raw: string): AnyHookEventInput | null {
+  try {
+    const obj = JSON.parse(raw);
+    return obj?.hook_event_name ? (obj as AnyHookEventInput) : null;
+  } catch {
+    return null;
+  }
+}
 
 async function main(): Promise<void> {
   // Guard: no-op if not running inside cmux
@@ -37,15 +48,9 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  let event: AnyHookEventInput;
-  try {
-    event = JSON.parse(raw) as AnyHookEventInput;
-  } catch {
-    process.exit(0);
-  }
-
-  const eventName = event!.hook_event_name;
-  if (!eventName) {
+  // Parse outside try/catch so TypeScript can narrow through the switch
+  const event = parseEvent(raw);
+  if (!event) {
     process.exit(0);
   }
 
@@ -54,73 +59,74 @@ async function main(): Promise<void> {
   const env = getCmuxEnv();
   const socket = new CmuxSocket(env.socketPath);
   const cmd = new CmuxCommands(env.workspaceId);
-  const state = new StateManager(event!.session_id);
+  const state = new StateManager(event.session_id);
+  const ctx: HandlerContext = { socket, cmd, state, config, env };
 
-  // Dispatch to the appropriate handler
+  // Dispatch — TypeScript narrows `event` via discriminated union on hook_event_name
   try {
-    switch (eventName) {
+    switch (event.hook_event_name) {
       case 'SessionStart':
-        await onSessionStart(event! as any, socket, cmd, state, config, env);
+        await onSessionStart(event, ctx);
         break;
 
       case 'UserPromptSubmit':
-        await onUserPromptSubmit(event! as any, socket, cmd, state, config);
+        await onUserPromptSubmit(event, ctx);
         break;
 
       case 'PreToolUse':
-        await onPreToolUse(event! as any, socket, cmd, state, config, env);
+        await onPreToolUse(event, ctx);
         break;
 
       case 'PostToolUse':
-        await onPostToolUse(event! as any, socket, cmd, state, config);
+        await onPostToolUse(event, ctx);
         break;
 
       case 'PostToolUseFailure':
-        await onPostToolUseFailure(event! as any, socket, cmd, state, config);
+        await onPostToolUseFailure(event, ctx);
         break;
 
       case 'PermissionRequest':
-        await onPermissionRequest(event! as any, socket, cmd, state, config, env);
+        await onPermissionRequest(event, ctx);
         break;
 
       case 'Stop':
-        await onStop(event! as any, socket, cmd, state, config, env);
+        await onStop(event, ctx);
         break;
 
       case 'StopFailure':
-        await onStopFailure(event! as any, socket, cmd, state, config, env);
+        await onStopFailure(event, ctx);
         break;
 
       case 'SubagentStart':
-        await onSubagentStart(event! as any, socket, cmd, state, config);
+        await onSubagentStart(event, ctx);
         break;
 
       case 'SubagentStop':
-        await onSubagentStop(event! as any, socket, cmd, state, config);
+        await onSubagentStop(event, ctx);
         break;
 
       case 'Notification':
-        await onNotification(event! as any, socket, cmd, config, env);
+        await onNotification(event, ctx);
         break;
 
       case 'SessionEnd':
-        await onSessionEnd(event! as any, socket, cmd, state, config);
+        await onSessionEnd(event, ctx);
         break;
 
       case 'TaskCompleted':
-        await onTaskCompleted(event! as any, socket, cmd, config);
+        await onTaskCompleted(event, ctx);
         break;
 
       case 'PreCompact':
-        await onPreCompact(socket, cmd, state, config);
+        await onPreCompact(event, ctx);
         break;
 
       case 'PostCompact':
-        await onPostCompact(socket, cmd, state, config);
+        await onPostCompact(event, ctx);
         break;
 
       case 'WorktreeCreate':
-        await onWorktreeCreate(event! as any, socket, cmd, config);
+        await onWorktreeCreate(event, ctx);
         break;
 
       default:

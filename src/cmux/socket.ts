@@ -95,6 +95,21 @@ export class CmuxSocket {
   }
 
   /**
+   * Check if the given workspace is currently focused.
+   * Returns false on error — safe default that sends notifications rather than suppressing them.
+   */
+  async isFocused(workspaceId: string): Promise<boolean> {
+    try {
+      const response = await this.send('identify --json');
+      if (!response) return false;
+      const info = JSON.parse(response);
+      return info?.focused_workspace === workspaceId;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Fire multiple commands in parallel, each on its own connection.
    * cmux uses a one-command-per-connection protocol (closes after response),
    * so pipelining over a single connection does not work.

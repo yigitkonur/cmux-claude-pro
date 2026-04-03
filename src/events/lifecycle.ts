@@ -5,34 +5,30 @@
  * and update status during context compaction.
  */
 
-import type { CmuxSocket } from '../cmux/socket.js';
-import type { CmuxCommands } from '../cmux/commands.js';
-import type { StateManager } from '../state/manager.js';
-import type { CcCmuxConfig } from '../config/types.js';
+import type { PreCompactInput, PostCompactInput, TaskCompletedInput, WorktreeCreateInput } from './types.js';
+import type { HandlerContext } from './context.js';
 import type { StatusPhase } from '../state/types.js';
-import { STATUS_DISPLAY, formatStatusValue } from '../features/status.js';
+import { fireStatus } from '../cmux/helpers.js';
+import { AGENT_KEY } from '../constants.js';
+import { STATUS_DISPLAY } from '../features/status.js';
 import { LOG_SOURCE } from '../features/logger.js';
 
 /**
  * Handle PreCompact — log compaction start, save current status, set "compacting".
  */
 export async function onPreCompact(
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
+  event: PreCompactInput,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config } = ctx;
+
   if (config.features.logs) {
-    try {
-      socket.fire(
-        cmd.log('Compacting context...', {
-          level: 'progress',
-          source: LOG_SOURCE,
-        }),
-      );
-    } catch {
-      // Non-critical
-    }
+    socket.fire(
+      cmd.log('Compacting context...', {
+        level: 'progress',
+        source: LOG_SOURCE,
+      }),
+    );
   }
 
   // Save current status before overwriting with 'compacting'
@@ -41,17 +37,7 @@ export async function onPreCompact(
   });
 
   if (config.features.statusPills) {
-    const display = STATUS_DISPLAY.compacting;
-    try {
-      socket.fire(
-        cmd.setStatus('claude_code', formatStatusValue('compacting'), {
-          icon: display.icon,
-          color: display.color,
-        }),
-      );
-    } catch {
-      // Non-critical
-    }
+    fireStatus(socket, cmd, 'compacting');
   }
 }
 
@@ -62,22 +48,18 @@ export async function onPreCompact(
  * when compaction happened between turns or from subagent activity.
  */
 export async function onPostCompact(
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
+  event: PostCompactInput,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config } = ctx;
+
   if (config.features.logs) {
-    try {
-      socket.fire(
-        cmd.log('Context compacted', {
-          level: 'success',
-          source: LOG_SOURCE,
-        }),
-      );
-    } catch {
-      // Non-critical
-    }
+    socket.fire(
+      cmd.log('Context compacted', {
+        level: 'success',
+        source: LOG_SOURCE,
+      }),
+    );
   }
 
   // Restore the status that was active before compaction
@@ -93,17 +75,7 @@ export async function onPostCompact(
   });
 
   if (config.features.statusPills) {
-    const display = STATUS_DISPLAY[restoreTo];
-    try {
-      socket.fire(
-        cmd.setStatus('claude_code', formatStatusValue(restoreTo), {
-          icon: display.icon,
-          color: display.color,
-        }),
-      );
-    } catch {
-      // Non-critical
-    }
+    fireStatus(socket, cmd, restoreTo);
   }
 }
 
@@ -113,44 +85,36 @@ export async function onPostCompact(
  * Uses 'info' level (not 'success') to avoid confusion with main session "Done".
  */
 export async function onTaskCompleted(
-  event: { session_id: string; [key: string]: unknown },
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  config: CcCmuxConfig,
+  event: TaskCompletedInput,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, config } = ctx;
+
   if (!config.features.logs) return;
 
-  try {
-    socket.fire(
-      cmd.log('Subagent task completed', {
-        level: 'info',
-        source: LOG_SOURCE,
-      }),
-    );
-  } catch {
-    // Non-critical
-  }
+  socket.fire(
+    cmd.log('Subagent task completed', {
+      level: 'info',
+      source: LOG_SOURCE,
+    }),
+  );
 }
 
 /**
  * Handle WorktreeCreate — log worktree creation.
  */
 export async function onWorktreeCreate(
-  event: { session_id: string; path?: string; branch?: string; [key: string]: unknown },
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  config: CcCmuxConfig,
+  event: WorktreeCreateInput,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, config } = ctx;
+
   if (!config.features.logs) return;
 
-  try {
-    socket.fire(
-      cmd.log('Worktree created', {
-        level: 'info',
-        source: LOG_SOURCE,
-      }),
-    );
-  } catch {
-    // Non-critical
-  }
+  socket.fire(
+    cmd.log('Worktree created', {
+      level: 'info',
+      source: LOG_SOURCE,
+    }),
+  );
 }

@@ -5,18 +5,15 @@
  * PermissionRequest: Update status to "Waiting" and optionally notify.
  */
 
-import type { CmuxSocket } from '../cmux/socket.js';
-import type { CmuxCommands } from '../cmux/commands.js';
-import type { StateManager } from '../state/manager.js';
-import type { CcCmuxConfig } from '../config/types.js';
-import type { CmuxEnv } from '../util/env.js';
 import type { NotificationInput, PermissionRequestInput } from './types.js';
-import { STATUS_DISPLAY, formatStatusValue } from '../features/status.js';
+import type { HandlerContext } from './context.js';
+import { fireStatus, notifyIfUnfocused } from '../cmux/helpers.js';
+import { AGENT_KEY, NOTIFICATION_TITLE } from '../constants.js';
 import { LOG_SOURCE } from '../features/logger.js';
 
 /**
  * Handle Notification — forward to cmux desktop notification.
- * Uses notifyTarget for workspace-specific delivery (like official cmux hooks).
+ * Uses notifyIfUnfocused for workspace-specific delivery (like official cmux hooks).
  *
  * IMPORTANT: This handler NEVER changes the sidebar status pill.
  * Only PermissionRequest should set "Waiting" / "Needs input" status.
@@ -25,21 +22,16 @@ import { LOG_SOURCE } from '../features/logger.js';
  */
 export async function onNotification(
   event: NotificationInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  config: CcCmuxConfig,
-  env: CmuxEnv,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, config, env } = ctx;
+
   if (!config.features.notifications) return;
 
-  const title = event.title ?? 'Claude Code';
+  const title = event.title ?? NOTIFICATION_TITLE;
   const message = event.message ?? '';
 
-  try {
-    socket.fire(cmd.notifyTarget(env.workspaceId, env.surfaceId, title, '', message));
-  } catch {
-    // Non-critical
-  }
+  await notifyIfUnfocused(socket, cmd, env, '', message);
 }
 
 /**
@@ -48,12 +40,10 @@ export async function onNotification(
  */
 export async function onPermissionRequest(
   event: PermissionRequestInput,
-  socket: CmuxSocket,
-  cmd: CmuxCommands,
-  state: StateManager,
-  config: CcCmuxConfig,
-  env: CmuxEnv,
+  ctx: HandlerContext,
 ): Promise<void> {
+  const { socket, cmd, state, config, env } = ctx;
+
   const toolName = event.tool_name ?? 'unknown';
 
   // Update state
@@ -63,41 +53,24 @@ export async function onPermissionRequest(
 
   // Set status to Waiting
   if (config.features.statusPills) {
-    const display = STATUS_DISPLAY.waiting;
-    try {
-      socket.fire(
-        cmd.setStatus('claude_code', formatStatusValue('waiting', toolName), {
-          icon: display.icon,
-          color: display.color,
-        }),
-      );
-    } catch {
-      // Non-critical
-    }
+    fireStatus(socket, cmd, 'waiting', toolName);
   }
+
+  // Mark tab as unread so the user sees the permission request
+  socket.fire(cmd.markUnread());
 
   // Log permission request
   if (config.features.logs) {
-    try {
-      socket.fire(
-        cmd.log(`Permission requested: ${toolName}`, {
-          level: 'warning',
-          source: LOG_SOURCE,
-        }),
-      );
-    } catch {
-      // Non-critical
-    }
+    socket.fire(
+      cmd.log(`Permission requested: ${toolName}`, {
+        level: 'warning',
+        source: LOG_SOURCE,
+      }),
+    );
   }
 
   // Send targeted desktop notification if configured
   if (config.features.notifications && config.notifications.onPermission) {
-    try {
-      socket.fire(
-        cmd.notifyTarget(env.workspaceId, env.surfaceId, 'Claude Code', 'Permission Required', `Tool: ${toolName}`),
-      );
-    } catch {
-      // Non-critical
-    }
+    await notifyIfUnfocused(socket, cmd, env, 'Permission Required', `Tool: ${toolName}`);
   }
 }

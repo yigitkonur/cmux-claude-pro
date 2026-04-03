@@ -48,6 +48,7 @@ export function spawnAgentPane(
   prompt: string,
   surfaceId: string,
   direction: string,
+  model?: string | null,
 ): SpawnResult | null {
   const execOpts = {
     encoding: 'utf-8' as BufferEncoding,
@@ -84,7 +85,7 @@ export function spawnAgentPane(
     // notifies on completion, then cleans up
     const launcherScript = [
       '#!/bin/bash',
-      `claude -p '${escapedPrompt}' --model claude-sonnet-4-20250514 2>&1`,
+      `claude -p '${escapedPrompt}'${model ? ` --model ${model}` : ''} 2>&1`,
       `EXIT_CODE=$?`,
       `${cmuxBin} notify "Agent Complete" --subtitle="${agentType}" --body="Exit code: $EXIT_CODE"`,
       `rm -f "${launcherPath}"`,
