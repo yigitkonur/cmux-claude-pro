@@ -358,106 +358,73 @@ if i say yes, delete them. if i say no, leave them.
 }
 ```
 
-## ssh / et / remote machines
+## ssh / remote machines (`cmux ssh`)
 
-when you ssh (or et) into a remote machine and run claude code there, cmux-claude-code can update **your local sidebar** with the remote session's status, including the remote hostname and cwd.
+when you run `cmux ssh myserver` and start claude code on the remote, the handler detects the TCP relay and uses V2 JSON-RPC to update your local cmux sidebar.
+
+**important:** use `cmux ssh`, not plain `ssh`. cmux ssh sets up a TCP relay with HMAC authentication that our handler talks through. plain ssh has no cmux integration.
 
 ### how it works
 
-the cmux unix socket gets forwarded to the remote machine via SSH's `-R` flag. the handler on the remote detects `SSH_CONNECTION`, grabs the hostname, and talks to your local cmux through the forwarded socket.
-
 ```
-local cmux sidebar ← unix socket ← SSH -R tunnel ← remote handler ← claude code hooks
+local cmux sidebar ← V2 JSON-RPC ← TCP relay (HMAC auth) ← cmuxd-remote ← handler ← claude code hooks
 ```
 
-when SSH isn't detected, the handler shows local info as usual.
+`cmux ssh` sets `CMUX_SOCKET_PATH=127.0.0.1:PORT` on the remote. our handler detects this TCP address and switches from V1 unix socket to V2 RPC calls via the `cmux` binary (which handles authentication internally).
 
-### setup (one-time per remote host)
+### what you see over SSH
 
-**step 1 — local machine:** create a symlink (cmux socket path has spaces that break SSH -R):
+the handler uses three visual channels over SSH:
+
+| channel | what it shows | example |
+|---|---|---|
+| **tab title** | current status + action | `Working: Bash: npm test` |
+| **workspace color** | state indicator | blue (working), gold (thinking), green (done), red (error) |
+| **workspace title** | git branch + progress | `main* \| 5 tools 33%` |
+
+plus:
+- desktop notifications (focus-aware — only fires when you're not watching)
+- tab/workspace unread dots on permission requests and errors
+- surface flash on permission requests and errors
+- workspace pinned while agent is actively working, unpinned when done
+
+### event → SSH visual mapping
+
+| hook event | tab title | workspace color | workspace title | extras |
+|---|---|---|---|---|
+| SessionStart | `Ready` | green | `main*` | clear notifs, mark read |
+| UserPromptSubmit | `Thinking...` | gold | (keep) | pin workspace |
+| PreToolUse | `Working: Bash: npm test` | blue (1st only) | `main* \| 5 tools 33%` | progress updates |
+| PostToolUse | (no change) | (no change) | (git refresh) | — |
+| PermissionRequest | `Waiting: Bash` | orange | (keep) | mark-unread, flash, notify |
+| Stop | `Done` | green | `main*` | unpin, notify |
+| StopFailure | `Error` | red | (keep) | mark-unread, flash, unpin |
+| PreCompact | `Compacting...` | purple | (keep) | — |
+| PostCompact | (restore) | (restore) | (keep) | — |
+| SessionEnd | clear | clear | clear | unpin, mark read |
+
+### SSH limitations (cmux V1-only features)
+
+these only work locally, not over SSH. they require sidebar V1 primitives that cmux hasn't exposed in V2 yet ([tracked in manaflow-ai/cmux#2558](https://github.com/manaflow-ai/cmux/issues/2558)):
+
+| feature | local | SSH | why |
+|---|---|---|---|
+| sidebar status pills (with SF icons) | ✅ | ❌ | `set_status` is V1 only |
+| sidebar progress bar | ✅ | ❌ | `set_progress` is V1 only |
+| sidebar activity log | ✅ | ❌ | `log` is V1 only |
+| sidebar git branch badge | ✅ | ❌ | `report_git_branch` is V1 only |
+| sidebar metadata blocks | ✅ | ❌ | `report_meta` is V1 only |
+| crash recovery (PID) | ✅ | ❌ | `set_agent_pid` is V1 only |
+
+over SSH, status is encoded in tab title + workspace color instead. progress and git branch are shown in the workspace title. notifications work normally.
+
+### install on remote (ssh-remote branch)
 
 ```bash
-# add to your ~/.zshrc or ~/.bashrc
-if [ -S "$CMUX_SOCKET_PATH" ]; then
-  ln -sf "$CMUX_SOCKET_PATH" /tmp/cmux-local.sock 2>/dev/null
-fi
+rm -rf /tmp/cmux-claude-code && cd /tmp && git clone -b ssh-remote https://github.com/yigitkonur/cmux-claude-code.git && cd cmux-claude-code && npm install && npm run build && bash install.sh
 ```
 
-**step 2 — local machine:** add socket forwarding + env forwarding to `~/.ssh/config`:
-
-```
-Host myserver
-  RemoteForward /tmp/cmux-fwd.sock /tmp/cmux-local.sock
-  SendEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID
-```
-
-`SendEnv` forwards the correct cmux identity vars from each tab's environment directly through SSH — no shared env file that goes stale.
-
-**step 3 — remote machine:** run the setup script (handles sshd config + shell profile):
-
-```bash
-scp remote-setup.sh myserver: && ssh myserver bash remote-setup.sh
-```
-
-or manually:
-
-```bash
-# accept cmux env vars from SSH + allow socket reuse
-echo "AcceptEnv CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID" | sudo tee -a /etc/ssh/sshd_config
-echo "StreamLocalBindUnlink yes" | sudo tee -a /etc/ssh/sshd_config
-# macOS:
-sudo launchctl kickstart -k system/com.openssh.sshd
-# Linux:
-sudo systemctl restart sshd
-```
-
-**step 4 — remote machine:** deploy handler + add socket detection:
-
-```bash
-# copy handler files from local
-scp ~/.cc-cmux/handler.cjs myserver:~/.cc-cmux/
-
-# or run the remote setup script (also handles step 3)
-scp remote-setup.sh myserver: && ssh myserver bash remote-setup.sh
-```
-
-add to the remote machine's `~/.zshrc` or `~/.bashrc` (the setup script does this automatically):
-
-```bash
-# cmux-claude-code: detect forwarded cmux socket
-# SSH SendEnv/AcceptEnv provides correct per-connection workspace/surface IDs.
-# Env file is fallback only (for ET/mosh where SendEnv is unavailable).
-if [ -S /tmp/cmux-fwd.sock ] && [ -n "$SSH_CONNECTION" ]; then
-  export CMUX_SOCKET_PATH=/tmp/cmux-fwd.sock
-  if [ -z "$CMUX_WORKSPACE_ID" ] && [ -f /tmp/cmux-fwd.env ]; then
-    . /tmp/cmux-fwd.env
-  fi
-fi
-```
-
-### what the sidebar shows for SSH sessions
-
-```
-host: user@macmini (ssh)              ← yellow network icon
-remote_cwd: /home/user/dev/project   ← gray folder icon
-model: opus-4.6                      ← purple cpu icon
-claude_code: Working: Bash: npm test ← blue hammer
-[claude] [info] SSH session: user@macmini
-```
-
-### for ET (eternal terminal)
-
-ET doesn't support `SendEnv` or socket forwarding. run a background SSH tunnel alongside it and write an env file with the current tab's IDs:
-
-```bash
-# write workspace/surface IDs for this tab, then start socket tunnel + ET
-printf 'export CMUX_WORKSPACE_ID=%s\nexport CMUX_SURFACE_ID=%s\n' \
-  "$CMUX_WORKSPACE_ID" "$CMUX_SURFACE_ID" | ssh myserver 'cat > /tmp/cmux-fwd.env'
-ssh -N -f -R /tmp/cmux-fwd.sock:/tmp/cmux-local.sock myserver
-et myserver
-```
-
-the handler reads the env file as fallback when `SendEnv`/`AcceptEnv` isn't available.
+this installs the SSH-optimized handler. restart claude code to activate.
 
 ## how it works
 
