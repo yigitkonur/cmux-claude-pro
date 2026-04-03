@@ -136,13 +136,21 @@ function v1ToRpc(command: string): RpcCall[] {
         { method: 'workspace.action', params: { action: 'clear-color' } },
       ];
 
-    case 'set_progress':
-      // Progress not available over SSH — silently skip.
-      // The status title from set_status already shows tool info.
-      return [];
+    case 'set_progress': {
+      // No sidebar progress bar over SSH. Use workspace.rename to show progress
+      // in the workspace title: "projectname [5 tools 33%]"
+      const value = positional[0] || '0';
+      const label = flags['label'] || '';
+      const pct = Math.round(parseFloat(value) * 100);
+      if (label) {
+        return [{ method: 'workspace.rename', params: { title: `${label} ${pct}%` } }];
+      }
+      return [{ method: 'workspace.rename', params: { title: `${pct}%` } }];
+    }
 
     case 'clear_progress':
-      return [];
+      // Reset workspace title — clear_name restores the default
+      return [{ method: 'workspace.action', params: { action: 'clear_name' } }];
 
     case 'log':
       // No sidebar log over SSH — silently drop
@@ -177,10 +185,18 @@ function v1ToRpc(command: string): RpcCall[] {
     case 'clear_agent_pid':
       return [];
 
-    case 'report_git_branch':
-      return []; // No V2 equivalent
+    case 'report_git_branch': {
+      // No sidebar git badge over SSH. Encode in workspace title.
+      const branch = positional[0] || '';
+      const dirty = flags['status'] === 'dirty' ? '*' : '';
+      if (branch) {
+        return [{ method: 'workspace.rename', params: { title: `${branch}${dirty}` } }];
+      }
+      return [];
+    }
 
     case 'report_meta':
+      // No sidebar metadata over SSH — silently drop
       return [];
 
     case 'clear_meta':
