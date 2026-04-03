@@ -10,8 +10,10 @@
 
 import type { HandlerContext } from './context.js';
 import type { PreToolUseInput, PostToolUseInput, PostToolUseFailureInput } from './types.js';
+import type { V2RpcCall } from '../cmux/v2-emitter.js';
+import { V2_COLORS, formatWorkspaceTitle } from '../cmux/v2-emitter.js';
 import { formatToolLabel } from '../util/tool-format.js';
-import { resolveStatus } from '../features/status.js';
+import { resolveStatus, formatStatusValue } from '../features/status.js';
 import { formatToolLog, getLogLevel, LOG_SOURCE } from '../features/logger.js';
 import { calculateProgress, formatProgressLabel } from '../state/progress.js';
 import { isReadOnlyAgent, spawnAgentPane, getNextDirection } from '../features/agents.js';
@@ -19,6 +21,94 @@ import { detectGitInfo, isGitCommand } from '../features/git.js';
 import { CMUX_BIN } from '../util/env.js';
 import { fireStatus } from '../cmux/helpers.js';
 import { TOOL_HISTORY_MAX, RESPONSE_TRUNCATE } from '../constants.js';
+
+// ---- V2 SSH branches ----
+
+async function onPreToolUseV2(
+  event: PreToolUseInput,
+  ctx: HandlerContext,
+): Promise<void> {
+  const { socket, v2, state, config } = ctx;
+  const { tool_name: toolName, tool_input: toolInput } = event;
+
+  // Skip agent interception over SSH (no visible panes)
+  // Clear notifications
+  socket.fireV2(v2.clearNotifications());
+
+  const label = formatToolLabel(toolName, toolInput as Record<string, unknown>);
+
+  state.withState((s) => {
+    s.toolUseCount++;
+    const wasThinking = s.currentStatus === 'thinking';
+    s.currentStatus = 'working';
+
+    const calls: V2RpcCall[] = [
+      v2.setTabTitle(formatStatusValue('working', label, s.activeSubagents > 0 ? s.activeSubagents : undefined)),
+    ];
+
+    // Color only on thinking→working transition
+    if (wasThinking) calls.push(v2.setWorkspaceColor(V2_COLORS.working));
+
+    // Workspace title: "main* | 5 tools 33%"
+    if (config.features.progress) {
+      const progress = calculateProgress(s.toolUseCount, s.turnToolCounts);
+      calls.push(v2.setWorkspaceTitle(formatWorkspaceTitle(s.gitBranch, s.gitDirty, s.toolUseCount, progress)));
+    }
+
+    socket.fireV2All(calls);
+  });
+}
+
+async function onPostToolUseV2(
+  event: PostToolUseInput,
+  ctx: HandlerContext,
+): Promise<void> {
+  const { socket, v2, state, config } = ctx;
+  const { tool_name: toolName, tool_input: toolInput } = event;
+
+  // No logging over SSH. Only action: refresh git branch if git command detected.
+  if (config.features.gitIntegration && toolName === 'Bash') {
+    const command = toolInput['command'];
+    if (typeof command === 'string' && isGitCommand(command)) {
+      try {
+        const gitInfo = detectGitInfo(event.cwd);
+        state.withState((s) => {
+          s.gitBranch = gitInfo.branch;
+          s.gitDirty = gitInfo.dirty;
+        });
+        const s = state.read();
+        if (gitInfo.branch) {
+          const progress = calculateProgress(s.toolUseCount, s.turnToolCounts);
+          socket.fireV2(v2.setWorkspaceTitle(formatWorkspaceTitle(gitInfo.branch, gitInfo.dirty, s.toolUseCount, progress)));
+        }
+      } catch {}
+    }
+  }
+
+  // Also update tool history (same as V1 path)
+  try {
+    state.withState((s) => {
+      s.toolHistory.push({
+        toolName,
+        summary: formatToolLog(toolName, toolInput as Record<string, unknown>),
+        timestamp: Date.now(),
+      });
+      if (s.toolHistory.length > TOOL_HISTORY_MAX) {
+        s.toolHistory = s.toolHistory.slice(-TOOL_HISTORY_MAX);
+      }
+    });
+  } catch {}
+}
+
+async function onPostToolUseFailureV2(
+  _event: PostToolUseFailureInput,
+  _ctx: HandlerContext,
+): Promise<void> {
+  // Nothing to do over SSH (log-only event)
+  return;
+}
+
+// ---- V1 handlers ----
 
 /**
  * Handle PreToolUse — update status to "working" and set progress.
@@ -30,6 +120,8 @@ export async function onPreToolUse(
   event: PreToolUseInput,
   ctx: HandlerContext,
 ): Promise<void> {
+  if (ctx.isTcp) { return onPreToolUseV2(event, ctx); }
+
   const { socket, cmd, state, config, env } = ctx;
   const { tool_name: toolName, tool_input: toolInput } = event;
 
@@ -125,6 +217,8 @@ export async function onPostToolUse(
   event: PostToolUseInput,
   ctx: HandlerContext,
 ): Promise<void> {
+  if (ctx.isTcp) { return onPostToolUseV2(event, ctx); }
+
   const { socket, cmd, state, config, env } = ctx;
   const { tool_name: toolName, tool_input: toolInput } = event;
 
@@ -220,6 +314,8 @@ export async function onPostToolUseFailure(
   event: PostToolUseFailureInput,
   ctx: HandlerContext,
 ): Promise<void> {
+  if (ctx.isTcp) { return onPostToolUseFailureV2(event, ctx); }
+
   const { socket, cmd, state, config, env } = ctx;
   if (!config.features.logs) return;
 

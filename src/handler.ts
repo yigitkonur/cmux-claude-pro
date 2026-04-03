@@ -13,6 +13,7 @@ import { readStdin } from './util/stdin.js';
 import { loadConfig } from './config/loader.js';
 import { CmuxSocket } from './cmux/socket.js';
 import { CmuxCommands } from './cmux/commands.js';
+import { V2Emitter } from './cmux/v2-emitter.js';
 import { StateManager } from './state/manager.js';
 
 import type { AnyHookEventInput } from './events/types.js';
@@ -60,8 +61,9 @@ async function main(): Promise<void> {
   const cmuxBin = process.env['CMUX_BIN'] ?? 'cmux';
   const socket = new CmuxSocket(env.socketPath, cmuxBin);
   const cmd = new CmuxCommands(env.workspaceId);
+  const v2 = new V2Emitter();
   const state = new StateManager(event.session_id);
-  const ctx: HandlerContext = { socket, cmd, state, config, env };
+  const ctx: HandlerContext = { socket, cmd, v2, state, config, env, isTcp: socket.isTcp };
 
   // Dispatch — TypeScript narrows `event` via discriminated union on hook_event_name
   try {

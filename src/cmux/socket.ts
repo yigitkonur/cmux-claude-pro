@@ -220,7 +220,7 @@ function v1ToRpc(command: string): RpcCall[] {
 
 export class CmuxSocket {
   private readonly socketPath: string;
-  private readonly isTcp: boolean;
+  readonly isTcp: boolean;
   private readonly cmuxBin: string;
 
   constructor(socketPath: string, cmuxBin = 'cmux') {
@@ -269,6 +269,26 @@ export class CmuxSocket {
     for (const command of commands) {
       this.fire(command);
     }
+  }
+
+  /** Fire a V2 RPC call directly (SSH path, bypasses V1 parsing). */
+  fireV2(call: { method: string; params: Record<string, unknown> }): void {
+    try {
+      const jsonParams = JSON.stringify(call.params);
+      execFile(this.cmuxBin, ['rpc', call.method, jsonParams], { timeout: 3000 }, () => {});
+    } catch {}
+  }
+
+  /** Fire multiple V2 RPC calls in parallel. */
+  fireV2All(calls: Array<{ method: string; params: Record<string, unknown> }>): void {
+    for (const call of calls) {
+      this.fireV2(call);
+    }
+  }
+
+  /** Send a V2 RPC call and wait for response. */
+  async sendV2(call: { method: string; params: Record<string, unknown> }): Promise<string> {
+    return this.execRpc(call.method, call.params);
   }
 
   // ---- Unix socket transport (fast path, ~8ms) ----
