@@ -7,11 +7,118 @@
 
 import type { HandlerContext } from './context.js';
 import type { UserPromptSubmitInput, StopInput, StopFailureInput } from './types.js';
+import type { V2RpcCall } from '../cmux/v2-emitter.js';
+import { V2_COLORS, formatWorkspaceTitle } from '../cmux/v2-emitter.js';
 import { LOG_SOURCE } from '../features/logger.js';
 import { spawnTabTitleWorker, restoreTabTitle } from '../features/tab-title.js';
 import { CMUX_BIN } from '../util/env.js';
 import { statusCmd, notifyIfUnfocused } from '../cmux/helpers.js';
-import { TURN_HISTORY_MAX } from '../constants.js';
+import { NOTIFICATION_TITLE, TURN_HISTORY_MAX } from '../constants.js';
+
+/**
+ * V2 (SSH/TCP) branch for UserPromptSubmit.
+ */
+async function onUserPromptSubmitV2(
+  event: UserPromptSubmitInput,
+  ctx: HandlerContext,
+): Promise<void> {
+  const { socket, v2, state } = ctx;
+
+  state.withState((s) => {
+    if (s.toolUseCount > 0) {
+      s.turnToolCounts.push(s.toolUseCount);
+      if (s.turnToolCounts.length > TURN_HISTORY_MAX) {
+        s.turnToolCounts = s.turnToolCounts.slice(-TURN_HISTORY_MAX);
+      }
+    }
+    s.toolUseCount = 0;
+    s.currentStatus = 'thinking';
+    s.isInTurn = true;
+    s.turnNumber++;
+    s.turnStartTime = Date.now();
+  });
+
+  const calls: V2RpcCall[] = [
+    v2.setTabTitle('Thinking...'),
+    v2.setWorkspaceColor(V2_COLORS.thinking),
+    v2.clearNotifications(),
+    v2.markRead(),
+    v2.pin(),
+  ];
+
+  socket.fireV2All(calls);
+}
+
+/**
+ * V2 (SSH/TCP) branch for Stop.
+ */
+async function onStopV2(
+  event: StopInput,
+  ctx: HandlerContext,
+): Promise<void> {
+  const { socket, v2, state, config, env } = ctx;
+
+  state.withState((s) => {
+    s.currentStatus = 'done';
+    s.isInTurn = false;
+  });
+
+  const calls: V2RpcCall[] = [
+    v2.setTabTitle('Done'),
+    v2.setWorkspaceColor(V2_COLORS.done),
+    v2.clearNotifications(),
+    v2.unpin(),
+  ];
+
+  const s = state.read();
+  if (s.gitBranch) {
+    calls.push(v2.setWorkspaceTitle(formatWorkspaceTitle(s.gitBranch, s.gitDirty)));
+  }
+
+  socket.fireV2All(calls);
+
+  // Focus-aware notification
+  if (config.features.notifications && config.notifications.onStop) {
+    const lastMsg = (event.last_assistant_message || 'Response complete').slice(0, 100);
+    const focused = await socket.isFocused(env.workspaceId);
+    if (!focused) {
+      socket.fireV2(v2.notify(env.surfaceId, NOTIFICATION_TITLE, 'Done', lastMsg));
+    }
+  }
+}
+
+/**
+ * V2 (SSH/TCP) branch for StopFailure.
+ */
+async function onStopFailureV2(
+  event: StopFailureInput,
+  ctx: HandlerContext,
+): Promise<void> {
+  const { socket, v2, state, config, env } = ctx;
+
+  state.withState((s) => {
+    s.currentStatus = 'error';
+    s.isInTurn = false;
+  });
+
+  const calls: V2RpcCall[] = [
+    v2.setTabTitle('Error'),
+    v2.setWorkspaceColor(V2_COLORS.error),
+    v2.markTabUnread(),
+    v2.markWorkspaceUnread(),
+    v2.flash(env.surfaceId),
+    v2.unpin(),
+  ];
+
+  socket.fireV2All(calls);
+
+  if (config.features.notifications && config.notifications.onError) {
+    const focused = await socket.isFocused(env.workspaceId);
+    if (!focused) {
+      socket.fireV2(v2.notify(env.surfaceId, NOTIFICATION_TITLE, 'Error', 'Response failed'));
+    }
+  }
+}
 
 /**
  * Handle UserPromptSubmit — transition to "Thinking" status, reset tool count.
@@ -20,6 +127,8 @@ export async function onUserPromptSubmit(
   event: UserPromptSubmitInput,
   ctx: HandlerContext,
 ): Promise<void> {
+  if (ctx.isTcp) { return onUserPromptSubmitV2(event, ctx); }
+
   const { socket, cmd, state, config, env } = ctx;
 
   state.withState((s) => {
@@ -76,6 +185,8 @@ export async function onStop(
   event: StopInput,
   ctx: HandlerContext,
 ): Promise<void> {
+  if (ctx.isTcp) { return onStopV2(event, ctx); }
+
   const { socket, cmd, state, config, env } = ctx;
 
   const s = state.read();
@@ -134,6 +245,8 @@ export async function onStopFailure(
   event: StopFailureInput,
   ctx: HandlerContext,
 ): Promise<void> {
+  if (ctx.isTcp) { return onStopFailureV2(event, ctx); }
+
   const { socket, cmd, state, config, env } = ctx;
 
   state.withState((s) => {

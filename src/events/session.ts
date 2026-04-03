@@ -7,6 +7,8 @@
 
 import type { HandlerContext } from './context.js';
 import type { SessionStartInput, SessionEndInput } from './types.js';
+import type { V2RpcCall } from '../cmux/v2-emitter.js';
+import { V2_COLORS, formatWorkspaceTitle } from '../cmux/v2-emitter.js';
 import { STATUS_DISPLAY, formatStatusValue } from '../features/status.js';
 import { detectGitInfo } from '../features/git.js';
 import { deleteTabTitle } from '../features/tab-title.js';
@@ -15,12 +17,98 @@ import { AGENT_KEY, META_HOST, META_REMOTE_CWD, STALE_SESSION_MS } from '../cons
 import { hostname } from 'node:os';
 
 /**
+ * V2 (SSH/TCP) branch for SessionStart.
+ */
+async function onSessionStartV2(
+  event: SessionStartInput,
+  ctx: HandlerContext,
+): Promise<void> {
+  const { socket, v2, state, config, env } = ctx;
+
+  // Create and populate initial state (same as V1)
+  const s = state.createDefault();
+  s.sessionId = event.session_id;
+  s.workspaceId = env.workspaceId;
+  s.surfaceId = env.surfaceId;
+  s.socketPath = env.socketPath;
+  s.model = event.model ?? null;
+  s.sessionStartTime = Date.now();
+
+  if (config.features.gitIntegration && event.cwd) {
+    try {
+      const gitInfo = detectGitInfo(event.cwd);
+      s.gitBranch = gitInfo.branch;
+      s.gitDirty = gitInfo.dirty;
+    } catch {
+      // Git detection is best-effort
+    }
+  }
+
+  state.write(s);
+
+  const calls: V2RpcCall[] = [
+    v2.setTabTitle('Ready'),
+    v2.setWorkspaceColor(V2_COLORS.ready),
+    v2.clearNotifications(),
+    v2.markRead(),
+  ];
+
+  if (s.gitBranch) {
+    calls.push(v2.setWorkspaceTitle(formatWorkspaceTitle(s.gitBranch, s.gitDirty)));
+  }
+
+  socket.fireV2All(calls);
+
+  // Clean up stale state files (background, non-blocking)
+  try {
+    state.cleanStale(STALE_SESSION_MS);
+  } catch {
+    // Non-critical
+  }
+}
+
+/**
+ * V2 (SSH/TCP) branch for SessionEnd.
+ */
+async function onSessionEndV2(
+  event: SessionEndInput,
+  ctx: HandlerContext,
+): Promise<void> {
+  const { socket, v2, state } = ctx;
+
+  const calls: V2RpcCall[] = [
+    v2.clearTabTitle(),
+    v2.clearWorkspaceColor(),
+    v2.clearWorkspaceTitle(),
+    v2.clearNotifications(),
+    v2.markRead(),
+    v2.unpin(),
+  ];
+
+  socket.fireV2All(calls);
+
+  try {
+    state.delete();
+  } catch {
+    // Non-critical
+  }
+
+  try {
+    deleteTabTitle(event.session_id);
+  } catch {
+    // Non-critical
+  }
+}
+
+/**
  * Handle SessionStart — initialize the session state and sidebar.
  */
 export async function onSessionStart(
   event: SessionStartInput,
   ctx: HandlerContext,
 ): Promise<void> {
+  if (ctx.isTcp) { return onSessionStartV2(event, ctx); }
+
   const { socket, cmd, state, config, env } = ctx;
 
   // Create and populate initial state
@@ -126,6 +214,8 @@ export async function onSessionEnd(
   event: SessionEndInput,
   ctx: HandlerContext,
 ): Promise<void> {
+  if (ctx.isTcp) { return onSessionEndV2(event, ctx); }
+
   const { socket, cmd, state, config, env } = ctx;
 
   const commands: string[] = [];
